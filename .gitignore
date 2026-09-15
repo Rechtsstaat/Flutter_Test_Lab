@@ -46,3 +46,11 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Project research and local prototype artifacts (not part of the Flutter app)
+/직방_현장조사/
+/직방/
+/serve.py
+/FLUTTER_APP_README.md
+/나열_카테고라이즈.md
+/나열_필수or선택.md
