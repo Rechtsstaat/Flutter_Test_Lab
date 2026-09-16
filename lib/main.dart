@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 enum ListingPlatform { zigbang, dabang }
@@ -1137,10 +1138,17 @@ class RemoteFormPage extends StatefulWidget {
 }
 
 class _RemoteFormPageState extends State<RemoteFormPage> {
+  /// Installs a WKWebView user script that runs in every frame. The Kakao
+  /// postcode results live in a cross-origin iframe, so nothing evaluated
+  /// through [WebViewController] — which only reaches the main frame — can see
+  /// them. Answers whether the script was installed; only iOS provides it.
+  static const _frameScripts = MethodChannel('jikbang/frame_script');
+
   late final WebViewController controller;
   late String status;
   List<String> limitations = const [];
   String? _lastInjectedUrl;
+  bool _picksAddress = false;
 
   /// The mirror serves `.../oneroom/index.html` as a 308 to `.../oneroom/`, so
   /// the URL that reaches [onPageFinished] never equals the configured one.
@@ -1195,8 +1203,9 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
         result['violations'] as List? ?? const [],
       );
       setState(() {
+        final picker = _picksAddress ? ' · 주소 자동 선택' : '';
         status =
-            '입력 ${result['applied'] ?? 0}건 · 검증 ${result['verified'] ?? 0}건';
+            '입력 ${result['applied'] ?? 0}건 · 검증 ${result['verified'] ?? 0}건$picker';
         limitations = [...missing, ...violations, ...unsupported];
       });
     } catch (_) {
@@ -1216,6 +1225,8 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
     _lastInjectedUrl = current.toString();
     setState(() => status = '${widget.platform.label} 미러에 입력하는 중…');
     final payload = jsonEncode(widget.values);
+    final address = '${widget.values['address'] ?? ''}';
+    _picksAddress = address.isEmpty ? false : await _installFramePicker(address);
     try {
       // The bridge has to be in place before the adapter presses anything that
       // can open the address search.
@@ -1229,6 +1240,24 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
       );
     } catch (error) {
       if (mounted) setState(() => status = '자동 입력 JavaScript 오류: $error');
+    }
+  }
+
+  /// The user script has to be registered before the Kakao frame loads, which
+  /// is why this runs with the rest of the injection rather than when the
+  /// address search opens.
+  Future<bool> _installFramePicker(String address) async {
+    try {
+      final installed = await _frameScripts.invokeMethod<bool>(
+        'setFrameScript',
+        addressPickerFrameScript(jsonEncode(address)),
+      );
+      return installed ?? false;
+    } on MissingPluginException {
+      // Android and the tests have no frame-script bridge: the user picks.
+      return false;
+    } on PlatformException {
+      return false;
     }
   }
 
@@ -1696,7 +1725,7 @@ String zigbangInjectionScript(String payload) =>
           });
           window.__flrZigbangAddressWatch.observe(document.body, {subtree: true, childList: true});
         }
-        note('매물 기본 주소: 검색어를 넣고 카카오 주소 검색 화면을 띄웠습니다. 결과를 고르면 직방 주소 칸이 채워집니다.');
+        note('매물 기본 주소: 카카오 주소 검색을 띄웠습니다. 자동으로 고르지 못하면 결과를 직접 눌러 주세요. 고르면 직방 주소 칸이 채워집니다.');
         press(lat);
       }
     }
@@ -2216,7 +2245,7 @@ String dabangInjectionScript(String payload) =>
       const cell = addressCell();
       const search = cell && [...cell.querySelectorAll('button')].find(button => norm(text(button)) === '검색');
       if (search) {
-        note('매물 기본 주소: 검색어를 넣고 카카오 주소 검색 화면을 띄웠습니다. 결과를 고르면 주소·동·호가 채워집니다.');
+        note('매물 기본 주소: 카카오 주소 검색을 띄웠습니다. 자동으로 고르지 못하면 결과를 직접 눌러 주세요. 고르면 주소·동·호가 채워집니다.');
         press(search);
       } else miss('address', '매물 주소의 「검색」 버튼을 찾지 못했습니다.');
     }
@@ -2230,5 +2259,132 @@ String dabangInjectionScript(String payload) =>
   }
   // 「임시저장」·「등록 완료」·#submit 은 어떤 경우에도 누르지 않는다. 이 어댑터는 채우기만 한다.
   publish();
+})();
+''';
+
+String addressPickerFrameScript(String target) =>
+    '''
+(() => {
+  // Runs in EVERY frame, so leave the mirror page alone.
+  if (!/^postcode\\.map\\.(kakao\\.com|daum\\.net)\$/.test(location.hostname)) return;
+  if (window.__flrPickerRan) return;
+  window.__flrPickerRan = true;
+
+  const target = $target;
+  if (!target) return;
+  // Only the search this app started gets picked for the user. If they clear the
+  // box and look for somewhere else, that is their choice to make.
+  const query = (document.getElementById('cQuery') || {}).value ||
+    new URLSearchParams(location.search).get('cq') || '';
+  const squash = value => String(value === undefined || value === null ? '' : value).replace(/\\s+/g, '');
+  if (squash(query) !== squash(target)) return;
+  try {
+    if (sessionStorage.getItem('flrPicked') === '1') return;
+  } catch (_) { /* private mode: fall through and pick once per frame load */ }
+
+  // 시·도 이름은 카카오가 「서울」로 줄여 쓰기도 하고 「서울특별시」로 다 쓰기도 한다.
+  const SIDO = [
+    ['서울특별시', '서울'], ['부산광역시', '부산'], ['대구광역시', '대구'], ['인천광역시', '인천'],
+    ['광주광역시', '광주'], ['대전광역시', '대전'], ['울산광역시', '울산'], ['세종특별자치시', '세종'],
+    ['경기도', '경기'], ['강원특별자치도', '강원'], ['강원도', '강원'], ['충청북도', '충북'],
+    ['충청남도', '충남'], ['전북특별자치도', '전북'], ['전라북도', '전북'], ['전라남도', '전남'],
+    ['경상북도', '경북'], ['경상남도', '경남'], ['제주특별자치도', '제주'], ['제주도', '제주'],
+  ];
+  const normalize = value => {
+    let text = squash(value);
+    for (const [full, short] of SIDO) {
+      if (text.startsWith(full)) { text = short + text.slice(full.length); break; }
+      if (text.startsWith(short)) break;
+    }
+    // 건물 이름은 통합 폼 주소에 없을 때가 많다 — 점수에서 뺀다.
+    return text.replace(/\\(.*?\\)/g, '');
+  };
+
+  const wanted = normalize(target);
+  // 번지·건물번호는 「123」과 「123-4」를 가르는 결정적인 부분이라 따로 본다.
+  const numbersOf = text => (text.match(/\\d+(-\\d+)?/g) || []);
+  const wantedNumbers = numbersOf(wanted);
+
+  const score = candidate => {
+    const value = normalize(candidate);
+    if (!value) return -1;
+    if (value === wanted) return 1000;
+    let points = 0;
+    // 앞에서부터 같은 길이 — 시/도 → 구 → 도로명 순으로 겹칠수록 높다.
+    let prefix = 0;
+    while (prefix < value.length && prefix < wanted.length && value[prefix] === wanted[prefix]) prefix++;
+    points += prefix * 4;
+    const values = numbersOf(value);
+    for (const number of wantedNumbers) {
+      if (values.includes(number)) points += 60;
+      else if (values.some(other => other.split('-')[0] === number.split('-')[0])) points += 20;
+    }
+    // 찾는 주소에 없는 번지가 후보에 더 붙어 있으면(123 → 123-4) 그만큼 뺀다.
+    points -= Math.max(0, values.length - wantedNumbers.length) * 15;
+    if (value.includes(wanted) || wanted.includes(value)) points += 40;
+    return points;
+  };
+
+  const press = el => {
+    el.scrollIntoView({block: 'center'});
+    el.click();
+  };
+
+  const candidates = () => [...document.querySelectorAll('span.txt_address[data-addr]')]
+    .map(span => ({
+      span,
+      button: span.querySelector('button.link_post'),
+      address: span.getAttribute('data-addr') || '',
+      road: span.getAttribute('data-addr_type') === 'R',
+    }))
+    .filter(item => item.button && item.address);
+
+  const best = items => {
+    let winner = null;
+    for (const item of items) {
+      const value = score(item.address);
+      // 같은 점수면 먼저 나온 것 — 카카오가 이미 관련도 순으로 준다.
+      // 도로명은 두 미러가 모두 주소 칸에 쓰는 형식이라 동점에서 한 표 더 준다.
+      const weighted = value + (item.road ? 1 : 0);
+      if (!winner || weighted > winner.weighted) winner = {item, weighted};
+    }
+    return winner && winner.item;
+  };
+
+  const waitFor = (predicate, timeout) => new Promise(resolve => {
+    const until = Date.now() + timeout;
+    const tick = () => {
+      const value = predicate();
+      if (value) return resolve(value);
+      if (Date.now() >= until) return resolve(null);
+      setTimeout(tick, 80);
+    };
+    tick();
+  });
+
+  (async () => {
+    // 첫 화면: 우편번호 묶음마다 도로명·지번 후보가 붙어 있다.
+    const first = await waitFor(() => {
+      const items = candidates();
+      return items.length ? items : null;
+    }, 8000);
+    if (!first) return;
+    const pick = best(first);
+    if (!pick) return;
+    try { sessionStorage.setItem('flrPicked', '1'); } catch (_) { /* ignore */ }
+    press(pick.button);
+
+    // 도로명 하나에 지번이 여럿이면 카카오가 지번 고르는 화면을 한 번 더 띄운다.
+    const second = await waitFor(() => {
+      const list = document.querySelector('.main_jibun, .list_jibun, [class*=mapping_jibun]');
+      if (!list) return null;
+      const items = candidates().filter(item => list.contains(item.span));
+      return items.length ? items : null;
+    }, 2500);
+    if (!second) return;
+    const follow = best(second);
+    // 어느 지번인지 가릴 근거가 없으면 카카오가 준 첫 줄을 쓴다.
+    press((follow || second[0]).button);
+  })();
 })();
 ''';

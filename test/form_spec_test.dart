@@ -134,11 +134,25 @@ void main() {
     expect(script, contains('const host = buildOverlay();'));
   });
 
+  test('address picker runs only in the Kakao frame and only for our search', () {
+    final script = addressPickerFrameScript('"서울특별시 강남구 테헤란로 123"');
+    // 이 스크립트는 모든 프레임에서 돈다 — 미러 페이지는 건드리면 안 된다.
+    expect(script, contains(r"/^postcode\.map\.(kakao\.com|daum\.net)$/"));
+    // 사용자가 검색어를 바꿔 다시 찾으면 자동 선택하지 않는다.
+    expect(script, contains('if (squash(query) !== squash(target)) return;'));
+    expect(script, contains("sessionStorage.getItem('flrPicked')"));
+    // 후보는 카카오가 붙여 둔 한글 주소 속성에서 읽는다.
+    expect(script, contains("span.txt_address[data-addr]"));
+    // 점수가 같으면 카카오가 준 순서대로 — 맨 위가 이긴다.
+    expect(script, contains('weighted > winner.weighted'));
+  });
+
   test('generated adapters are valid JavaScript', () {
     final scripts = {
       'zigbang': zigbangInjectionScript('{}'),
       'dabang': dabangInjectionScript('{}'),
       'bridge': postcodeBridgeScript('""'),
+      'framePicker': addressPickerFrameScript('""'),
     };
     scripts.forEach((name, source) {
       final temp = File(
