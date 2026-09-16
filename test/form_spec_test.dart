@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jibang_listing_test/main.dart';
@@ -72,20 +74,87 @@ void main() {
     expect(dabang.onPressed, isNotNull);
   });
 
-  test('Dabang script reports its result and never activates submit', () {
+  test('adapters report their result and never activate submit', () {
+    for (final script in [
+      zigbangInjectionScript('{}'),
+      dabangInjectionScript('{}'),
+    ]) {
+      expect(script, contains('window.ListingResult.postMessage'));
+      expect(script, contains('missing: []'));
+      expect(script, contains('unsupported: []'));
+      expect(script, contains('violations: []'));
+      expect(script, isNot(contains("getElementById('submit')")));
+      expect(script, isNot(contains("querySelector('#submit')")));
+      expect(script, isNot(contains("'등록 완료'")));
+      expect(script, isNot(contains("'임시저장'")));
+    }
+  });
+
+  test('Dabang adapter addresses one th/td pair at a time and re-resolves rows', () {
     final script = dabangInjectionScript('{}');
-    expect(script, contains('window.ListingResult.postMessage'));
-    expect(script, contains('unsupported: []'));
-    expect(script, contains('missing: []'));
-    expect(script, contains('violations: []'));
-    expect(script, contains("querySelectorAll('tr')"));
-    expect(script, contains("selectRow('buildingUse', '건축물용도'"));
-    expect(script, contains("selectRow('directionBase', '방향 기준/방향'"));
-    expect(script, contains("named('room', 1)"));
-    expect(script, contains("named('supply', 1)"));
-    expect(script, contains('el.value === option.value'));
-    expect(script, isNot(contains("getElementById('submit')")));
-    expect(script, isNot(contains("querySelector('#submit')")));
-    expect(script, isNot(contains("press(document.getElementById('submit'))")));
+    // 다방은 한 <tr> 에 (th, td) 쌍을 여럿 넣는다 — 줄 전체를 훑으면 옆 항목을 건드린다.
+    expect(script, contains('const cellOf = (section, label)'));
+    expect(script, contains("while (node && node.tagName !== 'TD')"));
+    expect(script, contains("cellOf('additional_info', '엘리베이터')"));
+    // 미러가 행을 통째로 갈아 끼우므로 자리는 늘 함수로 다시 찾아야 한다.
+    expect(script, contains('const at = target =>'));
+    expect(script, contains('const ready = (locate, timeout)'));
+    // 깐깐이를 통과하는 입력·클릭 방식
+    expect(script, contains('valueSetter(el).call(el, String(value))'));
+    expect(script, contains("new PointerEvent('pointerdown', init)"));
+    // 주소·관리비 흐름
+    expect(script, contains("modal('월 관리비 상세입력')"));
+    expect(script, contains("modal('건축물대장')"));
+    expect(script, contains('new MutationObserver'));
+    expect(script, contains('afterAddressPicked'));
+    expect(script, contains("input[name=\"keyword\"]"));
+  });
+
+  test('Zigbang adapter fills the address through the Kakao picker', () {
+    final script = zigbangInjectionScript('{}');
+    expect(script, contains("press(lat)"));
+    expect(script, contains('__flrPostcode'));
+    expect(script, contains('소재지 공개 확인'));
+    // 주소는 더 이상 「불가」 항목이 아니다.
+    expect(script, isNot(contains('address:')));
+  });
+
+  test('Kakao postcode bridge renders in-page instead of opening a window', () {
+    final script = postcodeBridgeScript('"서울특별시 강남구 테헤란로 123"');
+    expect(script, contains('inner.embed(host, params)'));
+    expect(script, contains("id = 'flr-postcode-overlay'"));
+    expect(script, contains("history.pushState({flrPostcode: true}"));
+    expect(script, contains('window.__flrClosePostcode'));
+    // 미러가 넘긴 oncomplete 는 그대로 살려야 원래 폼 흐름이 돈다.
+    expect(script, contains('source.oncomplete(value)'));
+    // 직방 미러가 늦게 실어 오는 원본 스크립트도 래퍼를 덮지 못한다.
+    expect(script, contains("Object.defineProperty(window.daum, 'Postcode'"));
+    // open() 은 창을 열지 않고 이 페이지 안의 겹을 세운다.
+    expect(script, contains('self.open = extra => {'));
+    expect(script, contains('const host = buildOverlay();'));
+  });
+
+  test('generated adapters are valid JavaScript', () {
+    final scripts = {
+      'zigbang': zigbangInjectionScript('{}'),
+      'dabang': dabangInjectionScript('{}'),
+      'bridge': postcodeBridgeScript('""'),
+    };
+    scripts.forEach((name, source) {
+      final temp = File(
+        '${Directory.systemTemp.path}/${name}_adapter_${DateTime.now().microsecondsSinceEpoch}.js',
+      );
+      try {
+        temp.writeAsStringSync(source);
+        final result = Process.runSync('node', ['--check', temp.path]);
+        expect(
+          result.exitCode,
+          0,
+          reason: '$name: ${result.stdout}\n${result.stderr}',
+        );
+      } finally {
+        if (temp.existsSync()) temp.deleteSync();
+      }
+    });
   });
 }
