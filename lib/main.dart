@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import 'android_layout.dart';
 import 'photo_transfer.dart';
 
 enum ListingPlatform { zigbang, dabang, daangn }
@@ -870,7 +871,7 @@ class _ListingFormPageState extends State<ListingFormPage> {
       actions: [TextButton(onPressed: _autoFill, child: const Text('자동 채우기'))],
     ),
     body: ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16) + androidBottomInset(context),
       children: [
         const Text(
           '직방·다방·당근 통합 명세 50개 항목',
@@ -1508,7 +1509,12 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
                     )
                     .toList(),
               ),
-            Expanded(child: WebViewWidget(controller: controller)),
+            Expanded(
+              child: Padding(
+                padding: androidBottomInset(context),
+                child: WebViewWidget(controller: controller),
+              ),
+            ),
           ],
         ),
       ),
