@@ -3,14 +3,19 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jibang_listing_test/main.dart';
+import 'package:jibang_listing_test/photo_transfer.dart';
 
 void main() {
-  test('master form has all 50 fields and 29 required fields from the specification', () {
+  test('master form has all 50 fields and photos are optional', () {
     final fields = groups.expand((group) => group.fields).toList();
 
     expect(groups, hasLength(5));
     expect(fields, hasLength(50));
-    expect(fields.where((field) => field.required), hasLength(29));
+    expect(fields.where((field) => field.required), hasLength(28));
+    expect(
+      fields.singleWhere((field) => field.key == 'photoCount').required,
+      isFalse,
+    );
   });
 
   test(
@@ -50,7 +55,21 @@ void main() {
   });
 
   testWidgets('both platform CTAs share validation enablement', (tester) async {
-    await tester.pumpWidget(const ListingApp());
+    Map<String, dynamic>? receivedValues;
+    ListingPlatform? receivedPlatform;
+    List<Object>? receivedPhotos;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ListingFormPage(
+          remotePageBuilder: (values, platform, photos) {
+            receivedValues = values;
+            receivedPlatform = platform;
+            receivedPhotos = photos;
+            return const Scaffold(body: Text('전송 대상 폼'));
+          },
+        ),
+      ),
+    );
     await tester.scrollUntilVisible(
       find.text('직방에 보내기'),
       600,
@@ -72,6 +91,13 @@ void main() {
     dabang = tester.widget(find.widgetWithText(FilledButton, '다방에 보내기'));
     expect(zigbang.onPressed, isNotNull);
     expect(dabang.onPressed, isNotNull);
+
+    await tester.tap(find.widgetWithText(FilledButton, '다방에 보내기'));
+    await tester.pumpAndSettle();
+    expect(find.text('전송 대상 폼'), findsOneWidget);
+    expect(receivedPlatform, ListingPlatform.dabang);
+    expect(receivedPhotos, isEmpty);
+    expect(receivedValues, isNot(contains('photoCount')));
   });
 
   test('adapters report their result and never activate submit', () {
@@ -90,25 +116,28 @@ void main() {
     }
   });
 
-  test('Dabang adapter addresses one th/td pair at a time and re-resolves rows', () {
-    final script = dabangInjectionScript('{}');
-    // 다방은 한 <tr> 에 (th, td) 쌍을 여럿 넣는다 — 줄 전체를 훑으면 옆 항목을 건드린다.
-    expect(script, contains('const cellOf = (section, label)'));
-    expect(script, contains("while (node && node.tagName !== 'TD')"));
-    expect(script, contains("cellOf('additional_info', '엘리베이터')"));
-    // 미러가 행을 통째로 갈아 끼우므로 자리는 늘 함수로 다시 찾아야 한다.
-    expect(script, contains('const at = target =>'));
-    expect(script, contains('const ready = (locate, timeout)'));
-    // 깐깐이를 통과하는 입력·클릭 방식
-    expect(script, contains('valueSetter(el).call(el, String(value))'));
-    expect(script, contains("new PointerEvent('pointerdown', init)"));
-    // 주소·관리비 흐름
-    expect(script, contains("modal('월 관리비 상세입력')"));
-    expect(script, contains("modal('건축물대장')"));
-    expect(script, contains('new MutationObserver'));
-    expect(script, contains('afterAddressPicked'));
-    expect(script, contains("input[name=\"keyword\"]"));
-  });
+  test(
+    'Dabang adapter addresses one th/td pair at a time and re-resolves rows',
+    () {
+      final script = dabangInjectionScript('{}');
+      // 다방은 한 <tr> 에 (th, td) 쌍을 여럿 넣는다 — 줄 전체를 훑으면 옆 항목을 건드린다.
+      expect(script, contains('const cellOf = (section, label)'));
+      expect(script, contains("while (node && node.tagName !== 'TD')"));
+      expect(script, contains("cellOf('additional_info', '엘리베이터')"));
+      // 미러가 행을 통째로 갈아 끼우므로 자리는 늘 함수로 다시 찾아야 한다.
+      expect(script, contains('const at = target =>'));
+      expect(script, contains('const ready = (locate, timeout)'));
+      // 깐깐이를 통과하는 입력·클릭 방식
+      expect(script, contains('valueSetter(el).call(el, String(value))'));
+      expect(script, contains("new PointerEvent('pointerdown', init)"));
+      // 주소·관리비 흐름
+      expect(script, contains("modal('월 관리비 상세입력')"));
+      expect(script, contains("modal('건축물대장')"));
+      expect(script, contains('new MutationObserver'));
+      expect(script, contains('afterAddressPicked'));
+      expect(script, contains("input[name=\"keyword\"]"));
+    },
+  );
 
   test('Zigbang adapter fills the address through the Kakao picker', () {
     final script = zigbangInjectionScript('{}');
@@ -134,18 +163,21 @@ void main() {
     expect(script, contains('const host = buildOverlay();'));
   });
 
-  test('address picker runs only in the Kakao frame and only for our search', () {
-    final script = addressPickerFrameScript('"서울특별시 강남구 테헤란로 123"');
-    // 이 스크립트는 모든 프레임에서 돈다 — 미러 페이지는 건드리면 안 된다.
-    expect(script, contains(r"/^postcode\.map\.(kakao\.com|daum\.net)$/"));
-    // 사용자가 검색어를 바꿔 다시 찾으면 자동 선택하지 않는다.
-    expect(script, contains('if (squash(query) !== squash(target)) return;'));
-    expect(script, contains("sessionStorage.getItem('flrPicked')"));
-    // 후보는 카카오가 붙여 둔 한글 주소 속성에서 읽는다.
-    expect(script, contains("span.txt_address[data-addr]"));
-    // 점수가 같으면 카카오가 준 순서대로 — 맨 위가 이긴다.
-    expect(script, contains('weighted > winner.weighted'));
-  });
+  test(
+    'address picker runs only in the Kakao frame and only for our search',
+    () {
+      final script = addressPickerFrameScript('"서울특별시 강남구 테헤란로 123"');
+      // 이 스크립트는 모든 프레임에서 돈다 — 미러 페이지는 건드리면 안 된다.
+      expect(script, contains(r"/^postcode\.map\.(kakao\.com|daum\.net)$/"));
+      // 사용자가 검색어를 바꿔 다시 찾으면 자동 선택하지 않는다.
+      expect(script, contains('if (squash(query) !== squash(target)) return;'));
+      expect(script, contains("sessionStorage.getItem('flrPicked')"));
+      // 후보는 카카오가 붙여 둔 한글 주소 속성에서 읽는다.
+      expect(script, contains("span.txt_address[data-addr]"));
+      // 점수가 같으면 카카오가 준 순서대로 — 맨 위가 이긴다.
+      expect(script, contains('weighted > winner.weighted'));
+    },
+  );
 
   test('generated adapters are valid JavaScript', () {
     final scripts = {
@@ -153,6 +185,8 @@ void main() {
       'dabang': dabangInjectionScript('{}'),
       'bridge': postcodeBridgeScript('""'),
       'framePicker': addressPickerFrameScript('""'),
+      'photoBridge': dabangPhotoBridgeScript(),
+      'photoCommand': dabangPhotoCommand('append', ['aGVsbG8=']),
     };
     scripts.forEach((name, source) {
       final temp = File(

@@ -1,8 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+
+import 'photo_transfer.dart';
 
 enum ListingPlatform { zigbang, dabang }
 
@@ -564,10 +568,8 @@ final List<FieldGroup> groups = [
       key: 'photoCount',
       label: '매물 사진 첨부',
       type: InputType.photoPicker,
-      required: true,
-      example: '5',
-      targetAvailable: false,
-      unavailableReason: '현재 앱에는 기기 사진 파일을 선택·보관하는 네이티브 피커가 구성되어 있지 않습니다. WebView JavaScript도 파일 input에 파일을 할당할 수 없으므로 사진 수를 임의로 입력하거나 전송 성공으로 표시하지 않습니다.',
+      example: '0',
+      unavailableReason: '사진은 선택 사항입니다. 선택한 사진은 다방 미러에 자동 첨부되며, 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다.',
     ),
     MasterField(
       number: 46,
@@ -630,7 +632,18 @@ class ListingApp extends StatelessWidget {
 }
 
 class ListingFormPage extends StatefulWidget {
-  const ListingFormPage({super.key});
+  const ListingFormPage({super.key, this.pickImages, this.remotePageBuilder});
+
+  /// Lets integration tests observe the real destination page after the same
+  /// user-driven form flow. Production continues to construct [RemoteFormPage]
+  /// below.
+  final Future<List<XFile>> Function()? pickImages;
+  final Widget Function(
+    Map<String, dynamic> values,
+    ListingPlatform platform,
+    List<XFile> photos,
+  )?
+  remotePageBuilder;
   @override
   State<ListingFormPage> createState() => _ListingFormPageState();
 }
@@ -638,6 +651,9 @@ class ListingFormPage extends StatefulWidget {
 class _ListingFormPageState extends State<ListingFormPage> {
   final values = <String, dynamic>{};
   final textControllers = <String, TextEditingController>{};
+  final photos = <XFile>[];
+  bool _pickingPhotos = false;
+  String? _photoError;
   String? error;
 
   @override
@@ -703,10 +719,7 @@ class _ListingFormPageState extends State<ListingFormPage> {
           values['postalCode'] = '06236';
           values['legalDongCode'] = '1168010100';
         case InputType.photoPicker:
-          // A test count lets the rest of the target adapter be exercised.
-          // The result page still reports that browser security prevents
-          // automatic File transfer to the remote input.
-          values[field.key] = field.example;
+          values[field.key] = photos.length;
         default:
           values[field.key] = field.example;
       }
@@ -787,9 +800,8 @@ class _ListingFormPageState extends State<ListingFormPage> {
     if ((values['trade'] == '월세' || values['trade'] == '전세') && _blank('lh')) {
       violations.add('48. LH 전세임대 여부');
     }
-    final photos = int.tryParse('${values['photoCount'] ?? 0}') ?? 0;
-    if (photos < 5 || photos > 20) {
-      violations.add('45. 실제로 선택된 매물 사진 5~20장');
+    if (photos.length > 20) {
+      violations.add('45. 실제로 선택된 매물 사진 최대 20장');
     }
     if ('${values['title'] ?? ''}'.length > 30) {
       violations.add('46. 제목은 최대 30자');
@@ -811,10 +823,21 @@ class _ListingFormPageState extends State<ListingFormPage> {
     }
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => RemoteFormPage(
-          values: Map<String, dynamic>.from(values),
-          platform: platform,
-        ),
+        builder: (_) {
+          final targetValues = Map<String, dynamic>.from(values);
+          final targetPhotos = List<XFile>.unmodifiable(photos);
+          if (targetPhotos.isEmpty) targetValues.remove('photoCount');
+          return widget.remotePageBuilder?.call(
+                targetValues,
+                platform,
+                targetPhotos,
+              ) ??
+              RemoteFormPage(
+                values: targetValues,
+                platform: platform,
+                photos: targetPhotos,
+              );
+        },
       ),
     );
   }
@@ -1106,21 +1129,101 @@ class _ListingFormPageState extends State<ListingFormPage> {
     );
   }
 
+  Future<void> _pickPhotos() async {
+    setState(() {
+      _pickingPhotos = true;
+      _photoError = null;
+    });
+    try {
+      final selected =
+          await (widget.pickImages?.call() ??
+              ImagePicker().pickMultiImage(
+                limit: 20,
+                requestFullMetadata: false,
+              ));
+      if (!mounted || selected.isEmpty) return;
+      if (selected.length > 20) {
+        throw const FormatException('사진은 최대 20장까지 선택할 수 있습니다.');
+      }
+      for (final photo in selected) {
+        await validateListingPhoto(photo);
+      }
+      if (!mounted) return;
+      setState(() {
+        photos
+          ..clear()
+          ..addAll(selected);
+        values['photoCount'] = photos.length;
+        error = null;
+      });
+    } on PlatformException catch (e) {
+      if (mounted) {
+        setState(
+          () => _photoError = '사진을 열지 못했습니다. 사진 접근 권한을 확인해 주세요. (${e.code})',
+        );
+      }
+    } catch (e) {
+      if (mounted) setState(() => _photoError = '사진 선택 오류: $e');
+    } finally {
+      if (mounted) setState(() => _pickingPhotos = false);
+    }
+  }
+
   Widget _photoField(String title) => Padding(
     padding: const EdgeInsets.all(12),
-    child: TextField(
-      controller: textControllers.putIfAbsent(
-        'photoCount',
-        () =>
-            TextEditingController(text: values['photoCount']?.toString() ?? ''),
-      ),
-      keyboardType: TextInputType.number,
-      decoration: InputDecoration(
-        labelText: '$title (5~20장)',
-        helperText: '테스트 장수입니다. 원격 미러의 파일 input에는 WebView JavaScript로 파일을 넣을 수 없어 결과에서 제한 사유를 표시합니다.',
-        border: const OutlineInputBorder(),
-      ),
-      onChanged: (value) => setState(() => values['photoCount'] = value),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('$title (선택, 최대 20장)'),
+        const SizedBox(height: 8),
+        const Text(
+          '사진 없이도 전송할 수 있습니다. 사진을 선택하면 1~20장을 다방 미러에 자동 첨부합니다. 직방 미러는 사진 첨부를 아직 지원하지 않으며, 장당 최대 30MB입니다.',
+        ),
+        OutlinedButton.icon(
+          onPressed: _pickingPhotos ? null : _pickPhotos,
+          icon: const Icon(Icons.photo_library_outlined),
+          label: Text(
+            _pickingPhotos ? '사진을 불러오는 중…' : '사진 선택 (${photos.length}/20장)',
+          ),
+        ),
+        if (_photoError != null)
+          Text(_photoError!, style: const TextStyle(color: Colors.red)),
+        if (photos.isNotEmpty)
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (var i = 0; i < photos.length; i++)
+                SizedBox(
+                  width: 100,
+                  child: Column(
+                    children: [
+                      Image.file(
+                        File(photos[i].path),
+                        width: 100,
+                        height: 80,
+                        fit: BoxFit.cover,
+                        cacheWidth: 200,
+                        errorBuilder: (_, _, _) => const SizedBox(
+                          height: 80,
+                          child: Icon(Icons.image),
+                        ),
+                      ),
+                      Text(i == 0 ? '대표사진' : '${i + 1}번 사진'),
+                      IconButton(
+                        tooltip: '${i + 1}번 사진 삭제',
+                        icon: const Icon(Icons.close),
+                        onPressed: () => setState(() {
+                          photos.removeAt(i);
+                          values['photoCount'] = photos.length;
+                        }),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+      ],
     ),
   );
 }
@@ -1130,9 +1233,17 @@ class RemoteFormPage extends StatefulWidget {
     super.key,
     required this.values,
     required this.platform,
+    this.photos = const [],
+    this.onDabangPhotoTransferComplete,
   });
   final Map<String, dynamic> values;
   final ListingPlatform platform;
+  final List<XFile> photos;
+
+  /// Test/diagnostic observation point. It fires only after the remote photo
+  /// transfer has settled, whether it succeeded or produced a concrete error.
+  final void Function(WebViewController controller, String? failure)?
+  onDabangPhotoTransferComplete;
   @override
   State<RemoteFormPage> createState() => _RemoteFormPageState();
 }
@@ -1149,6 +1260,8 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
   List<String> limitations = const [];
   String? _lastInjectedUrl;
   bool _picksAddress = false;
+  String? _photoStatus;
+  String? _photoFailure;
 
   /// The mirror serves `.../oneroom/index.html` as a 308 to `.../oneroom/`, so
   /// the URL that reaches [onPageFinished] never equals the configured one.
@@ -1193,6 +1306,7 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
   }
 
   void _receive(JavaScriptMessage message) {
+    if (!mounted) return;
     try {
       final result = jsonDecode(message.message) as Map<String, dynamic>;
       final unsupported = List<String>.from(
@@ -1226,7 +1340,9 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
     setState(() => status = '${widget.platform.label} 미러에 입력하는 중…');
     final payload = jsonEncode(widget.values);
     final address = '${widget.values['address'] ?? ''}';
-    _picksAddress = address.isEmpty ? false : await _installFramePicker(address);
+    _picksAddress = address.isEmpty
+        ? false
+        : await _installFramePicker(address);
     try {
       // The bridge has to be in place before the adapter presses anything that
       // can open the address search.
@@ -1238,6 +1354,33 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
             ? zigbangInjectionScript(payload)
             : dabangInjectionScript(payload),
       );
+      if (widget.platform == ListingPlatform.dabang &&
+          widget.photos.isNotEmpty) {
+        try {
+          await transferDabangPhotos(
+            photos: widget.photos,
+            evaluate: controller.runJavaScriptReturningResult,
+            isCancelled: () => !mounted,
+            onProgress: (completed, total) {
+              if (mounted) {
+                setState(
+                  () => _photoStatus = completed == total
+                      ? '사진 $completed장 첨부 확인 완료'
+                      : '사진 첨부 중… $completed/$total장 완료',
+                );
+              }
+            },
+          );
+        } catch (error) {
+          if (mounted) {
+            setState(() {
+              _photoStatus = '사진 첨부가 중단되었습니다.';
+              _photoFailure = error.toString();
+            });
+          }
+        }
+        widget.onDabangPhotoTransferComplete?.call(controller, _photoFailure);
+      }
     } catch (error) {
       if (mounted) setState(() => status = '자동 입력 JavaScript 오류: $error');
     }
@@ -1289,8 +1432,16 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
             width: double.infinity,
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
             padding: const EdgeInsets.all(12),
-            child: Text(status),
+            child: Text([status, ?_photoStatus].join('\n')),
           ),
+          if (_photoFailure != null)
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                _photoFailure!,
+                style: const TextStyle(color: Colors.red),
+              ),
+            ),
           if (limitations.isNotEmpty)
             ExpansionTile(
               initiallyExpanded: false,
@@ -1478,7 +1629,7 @@ String zigbangInjectionScript(String payload) =>
     lh: 'LH 전세임대 여부: 직방 원룸 폼에 입력란이 없습니다.',
     rooms: '방 개수: 직방 원룸 폼은 방 구조로 방 수를 정하며 별도 방 개수 입력란이 없습니다.',
     unknownFeeReason: '확인 불가 법정 사유: 직방 원룸 미러의 관리비 방식에는 확인 불가 분기가 없습니다.',
-    photoCount: '사진: WebView JavaScript는 기기 파일을 file input에 할당할 수 없습니다. 사용자가 직방 미러의 파일 선택기로 5~20장을 직접 선택해야 합니다.'
+    photoCount: '사진: 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다. 통합 폼에서 선택한 사진은 다방 미러에 자동 첨부할 수 있습니다.'
   };
   const esc = s => (window.CSS && CSS.escape) ? CSS.escape(String(s)) : String(s).replace(/[^a-zA-Z0-9_-]/g, '\\\\\$&');
   const find = name => document.querySelector('[name="' + esc(name) + '"], #' + esc(name) + ', [data-flr-key="' + esc(name) + '"]');
@@ -1609,7 +1760,11 @@ String zigbangInjectionScript(String payload) =>
       window.ListingResult.postMessage(JSON.stringify(output)); return;
     }
     if (strict && typeof strict !== 'function' && !strictSet && !strictClick) output.violations.push('FLR.strict에 호출 가능한 helper가 없어 DOM 대체 입력을 사용했습니다.');
-    for (const [key, reason] of Object.entries(unavailable)) if (data[key] !== undefined && data[key] !== '') output.unsupported.push(reason);
+    for (const [key, reason] of Object.entries(unavailable)) {
+      if (key === 'photoCount' ? Number(data[key]) > 0 : data[key] !== undefined && data[key] !== '') {
+        output.unsupported.push(reason);
+      }
+    }
     const input = (key, value, transform = v => v) => {
       if (value === undefined || value === null || value === '') return;
       const el = find(names[key]);
@@ -2237,7 +2392,6 @@ String dabangInjectionScript(String payload) =>
     if (filled(data.loanAvailable)) note('대출 가능 여부: 다방 등록 폼에 대응 입력란이 없습니다.');
     if (filled(data.ownerPhone)) note('집주인 연락처: 다방 등록 폼에 집주인 연락처 입력란이 없습니다.');
     if (data.singleBuilding === true) note('단일동 여부: 다방은 「등기부등본 상에 동 정보가 없을 경우」 체크만 제공하며 주소를 고른 뒤에 켜집니다.');
-    if (filled(data.photoCount)) note('사진: 브라우저 보안 정책상 WebView 스크립트가 파일 선택란에 기기 사진을 넣을 수 없어 「사진 추가」로 직접 골라 주셔야 합니다.');
     for (const message of (window.__flrPostcode ? window.__flrPostcode.notes : [])) note(message);
 
     // ⑱ 마지막에 주소 검색 화면을 띄운다 — 전체 화면 겹이라 다른 입력을 가린다.
