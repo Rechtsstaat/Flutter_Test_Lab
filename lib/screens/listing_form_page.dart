@@ -7,6 +7,7 @@ import '../data/app_store.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
 import '../fields.dart';
+import '../kakao_address.dart';
 import '../models/listing.dart';
 import 'publish_flow_page.dart';
 
@@ -125,6 +126,10 @@ class _ListingFormPageState extends State<ListingFormPage> {
           };
         case InputType.addressSearch:
           values[field.key] = field.example;
+          values['roadAddress'] = field.example;
+          // Drop details left over from an earlier real search.
+          values.remove('jibunAddress');
+          values.remove('buildingName');
           values['postalCode'] = '06236';
           values['legalDongCode'] = '1168010100';
         case InputType.photoPicker:
@@ -508,65 +513,32 @@ class _ListingFormPageState extends State<ListingFormPage> {
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            address.isEmpty
-                ? '검색 후 도로명·우편번호·법정동 코드를 함께 저장합니다.'
-                : '우편번호 ${values['postalCode'] ?? '-'} · 법정동 ${values['legalDongCode'] ?? '-'}',
-            style: Type.caption,
-          ),
+          Text(_addressHint(), style: Type.caption),
         ],
       ),
     );
   }
 
+  String _addressHint() {
+    final address = '${values['address'] ?? ''}'.trim();
+    if (address.isEmpty) {
+      return '카카오 우편번호 서비스로 도로명·지번·우편번호·법정동 코드를 함께 저장합니다.';
+    }
+    final jibun = '${values['jibunAddress'] ?? ''}'.trim();
+    return [
+      if (jibun.isNotEmpty && jibun != address) '지번 $jibun',
+      '우편번호 ${values['postalCode'] ?? '-'} · 법정동 ${values['legalDongCode'] ?? '-'}',
+    ].join('\n');
+  }
+
   Future<void> _searchAddress(MasterField field) async {
-    final result = await showModalBottomSheet<Map<String, String>>(
-      context: context,
-      backgroundColor: Brand.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(Insets.gutter),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('주소 검색', style: Type.title),
-              const SizedBox(height: 4),
-              const Text('테스트용 검색 결과', style: Type.caption),
-              const SizedBox(height: 16),
-              for (final option in const [
-                {
-                  'address': '서울특별시 강남구 테헤란로 123',
-                  'postalCode': '06236',
-                  'legalDongCode': '1168010100',
-                },
-                {
-                  'address': '서울특별시 강남구 역삼로 100',
-                  'postalCode': '06242',
-                  'legalDongCode': '1168010100',
-                },
-              ])
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: BrandButton(
-                    option['address']!,
-                    kind: BrandButtonKind.outlined,
-                    onPressed: () => Navigator.pop(context, option),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
+    final result = await Navigator.of(context).push<KakaoAddress>(
+      MaterialPageRoute(builder: (_) => const KakaoAddressSearchPage()),
     );
     if (result != null && mounted) {
       setState(() {
-        values[field.key] = result['address'];
-        values['postalCode'] = result['postalCode'];
-        values['legalDongCode'] = result['legalDongCode'];
+        values.addAll(result.toFormValues());
+        textControllers[field.key]?.text = '${values[field.key] ?? ''}';
       });
     }
   }

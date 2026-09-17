@@ -193,7 +193,8 @@ final List<FieldGroup> groups = [
       type: InputType.addressSearch,
       required: true,
       example: '서울특별시 강남구 테헤란로 123',
-      unavailableReason: '여기서 저장한 주소는 미러의 카카오 주소 검색 창에 검색어로 그대로 넘어갑니다. 좌표와 우편번호는 그 창에서 결과를 골라야 확정되므로, 전송 화면에서 한 번 눌러 주세요.',
+      unavailableReason:
+          '여기서 저장한 주소는 미러의 카카오 주소 검색 창에 검색어로 그대로 넘어갑니다. 좌표와 우편번호는 그 창에서 결과를 골라야 확정되므로, 전송 화면에서 한 번 눌러 주세요.',
     ),
     MasterField(
       number: 3,
@@ -582,7 +583,8 @@ final List<FieldGroup> groups = [
       label: '매물 사진 첨부',
       type: InputType.photoPicker,
       example: '0',
-      unavailableReason: '사진은 선택 사항입니다. 선택한 사진은 다방·당근 미러에 자동 첨부되며, 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다.',
+      unavailableReason:
+          '사진은 선택 사항입니다. 선택한 사진은 다방·당근 미러에 자동 첨부되며, 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다.',
     ),
     MasterField(
       number: 46,
