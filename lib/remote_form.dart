@@ -1,277 +1,7 @@
-import 'dart:convert';
-
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-
-import 'android_layout.dart';
-import 'fields.dart';
-import 'photo_transfer.dart';
-
-class RemoteFormPage extends StatefulWidget {
-  const RemoteFormPage({
-    super.key,
-    required this.values,
-    required this.platform,
-    this.photos = const [],
-    this.onPhotoTransferComplete,
-    this.onListingResult,
-  });
-  final Map<String, dynamic> values;
-  final ListingPlatform platform;
-  final List<XFile> photos;
-
-  /// Test/diagnostic observation point. It fires only after the remote photo
-  /// transfer has settled, whether it succeeded or produced a concrete error.
-  final void Function(WebViewController controller, String? failure)?
-  onPhotoTransferComplete;
-
-  /// Test/diagnostic observation point for each result the adapter publishes.
-  final void Function(
-    WebViewController controller,
-    Map<String, dynamic> result,
-  )?
-  onListingResult;
-  @override
-  State<RemoteFormPage> createState() => _RemoteFormPageState();
-}
-
-class _RemoteFormPageState extends State<RemoteFormPage> {
-  /// Installs a WKWebView user script that runs in every frame. The Kakao
-  /// postcode results live in a cross-origin iframe, so nothing evaluated
-  /// through [WebViewController] — which only reaches the main frame — can see
-  /// them. Answers whether the script was installed; only iOS provides it.
-  static const _frameScripts = MethodChannel('jikbang/frame_script');
-
-  late final WebViewController controller;
-  late String status;
-  List<String> limitations = const [];
-  String? _lastInjectedUrl;
-  bool _picksAddress = false;
-  String? _photoStatus;
-  String? _photoFailure;
-  List<String> _photoNotes = const [];
-
-  /// The mirror serves `.../oneroom/index.html` as a 308 to `.../oneroom/`, so
-  /// the URL that reaches [onPageFinished] never equals the configured one.
-  /// Comparing the directory form keeps both spellings pointing at one page.
-  static String _directory(Uri uri) {
-    var path = uri.path;
-    if (path.endsWith('index.html')) {
-      path = path.substring(0, path.length - 'index.html'.length);
-    }
-    return path.endsWith('/') ? path : '$path/';
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    status = '${widget.platform.label} 미러를 여는 중…';
-    final targetUri = Uri.parse(widget.platform.formUrl);
-    controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..addJavaScriptChannel('ListingResult', onMessageReceived: _receive)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onHttpAuthRequest: (request) {
-            if (request.host == targetUri.host) {
-              request.onProceed(
-                const WebViewCredential(user: 'mirror', password: 'money'),
-              );
-            } else {
-              request.onCancel();
-            }
-          },
-          onWebResourceError: (error) {
-            // Sub-resource failures (a CDN image, a public-data call) must not
-            // replace the injection status: only report the main frame.
-            if (error.isForMainFrame == false) return;
-            setState(() => status = '웹 뷰 오류: ${error.description}');
-          },
-          onPageFinished: _inject,
-        ),
-      )
-      ..loadRequest(targetUri);
-  }
-
-  void _receive(JavaScriptMessage message) {
-    if (!mounted) return;
-    try {
-      final result = jsonDecode(message.message) as Map<String, dynamic>;
-      final unsupported = List<String>.from(
-        result['unsupported'] as List? ?? const [],
-      );
-      final missing = List<String>.from(result['missing'] as List? ?? const []);
-      final violations = List<String>.from(
-        result['violations'] as List? ?? const [],
-      );
-      setState(() {
-        final picker = _picksAddress ? ' · 주소 자동 선택' : '';
-        status =
-            '입력 ${result['applied'] ?? 0}건 · 검증 ${result['verified'] ?? 0}건$picker';
-        limitations = [...missing, ...violations, ...unsupported];
-      });
-      widget.onListingResult?.call(controller, result);
-    } catch (_) {
-      setState(() => status = '입력 결과를 해석하지 못했습니다.');
-    }
-  }
-
-  Future<void> _inject(String url) async {
-    final current = Uri.tryParse(url);
-    final target = Uri.parse(widget.platform.formUrl);
-    if (current == null ||
-        current.host != target.host ||
-        _directory(current) != _directory(target) ||
-        _lastInjectedUrl == current.toString()) {
-      return;
-    }
-    _lastInjectedUrl = current.toString();
-    setState(() => status = '${widget.platform.label} 미러에 입력하는 중…');
-    final payload = jsonEncode(widget.values);
-    final address = '${widget.values['address'] ?? ''}';
-    final kakao = widget.platform.usesKakaoPostcode;
-    _picksAddress = !kakao || address.isEmpty
-        ? false
-        : await _installFramePicker(address);
-    try {
-      // The bridge has to be in place before the adapter presses anything that
-      // can open the address search.
-      if (kakao) {
-        await controller.runJavaScript(
-          postcodeBridgeScript(jsonEncode(widget.values['address'] ?? '')),
-        );
-      }
-      await controller.runJavaScript(switch (widget.platform) {
-        ListingPlatform.zigbang => zigbangInjectionScript(payload),
-        ListingPlatform.dabang => dabangInjectionScript(payload),
-        ListingPlatform.daangn => daangnInjectionScript(payload),
-      });
-      final photoTarget = widget.platform.photoTarget;
-      if (photoTarget != null && widget.photos.isNotEmpty) {
-        try {
-          final skipped = await transferListingPhotos(
-            target: photoTarget,
-            photos: widget.photos,
-            evaluate: controller.runJavaScriptReturningResult,
-            isCancelled: () => !mounted,
-            onProgress: (completed, total) {
-              if (mounted) {
-                setState(
-                  () => _photoStatus = completed == total
-                      ? '사진 $completed장 첨부 확인 완료'
-                      : '사진 첨부 중… $completed/$total장 완료',
-                );
-              }
-            },
-          );
-          if (mounted && skipped.isNotEmpty) {
-            setState(() {
-              _photoNotes = skipped;
-              _photoStatus ??= '첨부할 수 있는 사진이 없습니다.';
-            });
-          }
-        } catch (error) {
-          if (mounted) {
-            setState(() {
-              _photoStatus = '사진 첨부가 중단되었습니다.';
-              _photoFailure = error.toString();
-            });
-          }
-        }
-        widget.onPhotoTransferComplete?.call(controller, _photoFailure);
-      }
-    } catch (error) {
-      if (mounted) setState(() => status = '자동 입력 JavaScript 오류: $error');
-    }
-  }
-
-  /// The user script has to be registered before the Kakao frame loads, which
-  /// is why this runs with the rest of the injection rather than when the
-  /// address search opens.
-  Future<bool> _installFramePicker(String address) async {
-    try {
-      final installed = await _frameScripts.invokeMethod<bool>(
-        'setFrameScript',
-        addressPickerFrameScript(jsonEncode(address)),
-      );
-      return installed ?? false;
-    } on MissingPluginException {
-      // Android and the tests have no frame-script bridge: the user picks.
-      return false;
-    } on PlatformException {
-      return false;
-    }
-  }
-
-  Future<void> _handleBack(bool didPop, Object? result) async {
-    if (didPop) return;
-    try {
-      // Back closes the Kakao address overlay first, exactly as it would close
-      // a native picker, before it leaves the mirror.
-      final closed = await controller.runJavaScriptReturningResult(
-        "typeof window.__flrClosePostcode === 'function' && "
-        "window.__flrClosePostcode()",
-      );
-      if (closed == true || closed.toString() == 'true') return;
-    } catch (_) {
-      // The page may be navigating; fall through to the Flutter route.
-    }
-    if (mounted) Navigator.of(context).pop(result);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final reasons = [...limitations, ..._photoNotes];
-    return PopScope<Object?>(
-      canPop: false,
-      onPopInvokedWithResult: _handleBack,
-      child: Scaffold(
-        appBar: AppBar(title: Text('${widget.platform.label} 미러 입력')),
-        body: Column(
-          children: [
-            Container(
-              width: double.infinity,
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              padding: const EdgeInsets.all(12),
-              child: Text([status, ?_photoStatus].join('\n')),
-            ),
-            if (_photoFailure != null)
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text(
-                  _photoFailure!,
-                  style: const TextStyle(color: Colors.red),
-                ),
-              ),
-            if (reasons.isNotEmpty)
-              ExpansionTile(
-                initiallyExpanded: false,
-                title: Text('직접 확인할 항목 ${reasons.length}개'),
-                subtitle: const Text('사유 전체 보기'),
-                children: reasons
-                    .map(
-                      (reason) => ListTile(
-                        dense: true,
-                        leading: const Icon(Icons.info_outline),
-                        title: SelectableText(reason),
-                      ),
-                    )
-                    .toList(),
-              ),
-            Expanded(
-              child: Padding(
-                padding: androidBottomInset(context),
-                child: WebViewWidget(controller: controller),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+/// The JavaScript 한방 runs inside each mirror: the Kakao postcode bridge, the
+/// per-platform adapters, and the frame script that picks a Kakao result.
+/// `MirrorSession` decides when each one runs.
+library;
 
 String postcodeBridgeScript(String query) =>
     '''
@@ -1852,11 +1582,26 @@ const _daangnAdapterBody = r'''
 })();
 ''';
 
+/// The frames [addressPickerFrameScript] works in. Android only lets the script
+/// into these origins; iOS runs it in every frame and the script checks the
+/// host itself.
+const kakaoPostcodeOrigins = [
+  'https://postcode.map.kakao.com',
+  'https://postcode.map.daum.net',
+];
+
 String addressPickerFrameScript(String target) =>
     '''
-(() => {
+(function pick() {
   // Runs in EVERY frame, so leave the mirror page alone.
   if (!/^postcode\\.map\\.(kakao\\.com|daum\\.net)\$/.test(location.hostname)) return;
+  // Android puts this in as the document starts, before the result list exists.
+  // Kakao binds the result buttons in its own jQuery ready handler, so wait
+  // until every DOMContentLoaded listener has run — where iOS injects it.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(pick), {once: true});
+    return;
+  }
   if (window.__flrPickerRan) return;
   window.__flrPickerRan = true;
 

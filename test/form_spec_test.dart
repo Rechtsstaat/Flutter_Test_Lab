@@ -87,39 +87,90 @@ void main() {
 
     BrandButton cta() => tester.widget<BrandButton>(
       find.byWidgetPredicate(
-        (widget) => widget is BrandButton && widget.label.endsWith('채널에 등록하기'),
+        (widget) => widget is BrandButton && widget.label == '광고 등록',
       ),
     );
 
-    // With nothing filled in, the one CTA gates every selected channel at once.
-    expect(find.text('선택한 3개 채널에 등록하기'), findsOneWidget);
+    // With nothing filled in, the one CTA stays off and says why.
     expect(cta().onPressed, isNull);
+    expect(find.textContaining('필수 항목'), findsOneWidget);
 
-    // Narrowing the channel set has to narrow what the CTA promises.
+    // Narrow the run to 다방 in 플랫폼 선택, at the end of the long form.
+    await tester.scrollUntilVisible(
+      find.text('플랫폼 선택'),
+      600,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.ensureVisible(find.text('당근'));
     await tester.tap(find.text('직방'));
     await tester.tap(find.text('당근'));
     await tester.pump();
-    expect(find.text('선택한 1개 채널에 등록하기'), findsOneWidget);
     expect(cta().onPressed, isNull);
 
     await tester.tap(find.text('자동 채우기'));
     await tester.pump();
     expect(cta().onPressed, isNotNull);
+    expect(find.textContaining('필수 항목'), findsNothing);
 
-    await tester.tap(find.text('선택한 1개 채널에 등록하기'));
-    // The publish flow holds a beat on its progress screen before opening the
-    // mirror, and that screen animates forever — pump past it by hand rather
-    // than waiting for the tree to settle.
+    await tester.tap(find.text('광고 등록'));
+    // The Process Hub animates for as long as a platform is being worked on,
+    // so pump past the route change by hand.
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
     await tester.pump();
-    await tester.pump(const Duration(seconds: 1));
 
+    expect(find.text('다방에 입력하는 중이에요'), findsOneWidget);
+    expect(find.text('광고 등록 1 / 1'), findsWidgets);
+    // The platform page is mounted under the hub from the start.
     expect(find.text('전송 대상 폼'), findsOneWidget);
     expect(receivedPlatform, ListingPlatform.dabang);
     expect(receivedPhotos, isEmpty);
     expect(receivedValues, isNot(contains('photoCount')));
     expect(receivedValues, containsPair('address', isNotEmpty));
+    // The hi-fi's 구조 + 복층 여부 still reach the adapters as 방 구조.
+    expect(receivedValues, containsPair('roomLayout', '오픈형 원룸'));
+  });
+
+  testWidgets('입력 과정 보기 lifts the platform page out of the hub', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PublishFlowPage(
+          listing: Listing(
+            id: 'L1',
+            createdAt: DateTime(2026, 9, 17),
+            values: const {},
+            channels: const {},
+          ),
+          values: const {},
+          photos: const [],
+          channels: const [ListingPlatform.zigbang, ListingPlatform.daangn],
+          remotePageBuilder: (_, platform, _) =>
+              Center(child: Text('${platform.label} 페이지')),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.text('직방에 입력하는 중이에요'), findsOneWidget);
+    expect(find.text('정보를 입력하고 있어요'), findsOneWidget);
+    expect(find.text('입력 대기'), findsOneWidget);
+
+    await tester.tap(find.text('입력 과정 보기'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('입력이 끝날 때 까지 잠시만 기다려주세요'), findsOneWidget);
+    expect(find.text('직방 페이지'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('진행 상황으로'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    // Leaving before the form is filled only brings the hub back.
+    expect(find.text('정보를 입력하고 있어요'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 6));
   });
 
   test('adapters report their result and never activate submit', () {
@@ -242,6 +293,19 @@ void main() {
       final script = addressPickerFrameScript('"서울특별시 강남구 테헤란로 123"');
       // 이 스크립트는 모든 프레임에서 돈다 — 미러 페이지는 건드리면 안 된다.
       expect(script, contains(r"/^postcode\.map\.(kakao\.com|daum\.net)$/"));
+      // 안드로이드는 문서 시작 때 넣는다. 카카오가 결과 버튼에 클릭 처리기를 붙인
+      // 뒤(DOMContentLoaded 처리기들이 다 돈 뒤)에 눌러야 선택이 먹힌다.
+      expect(
+        script,
+        contains(
+          "document.addEventListener('DOMContentLoaded', () => setTimeout(pick)",
+        ),
+      );
+      // 안드로이드가 스크립트를 들여보내는 출처도 같은 두 호스트다.
+      expect(kakaoPostcodeOrigins, [
+        'https://postcode.map.kakao.com',
+        'https://postcode.map.daum.net',
+      ]);
       // 사용자가 검색어를 바꿔 다시 찾으면 자동 선택하지 않는다.
       expect(script, contains('if (squash(query) !== squash(target)) return;'));
       expect(script, contains("sessionStorage.getItem('flrPicked')"));

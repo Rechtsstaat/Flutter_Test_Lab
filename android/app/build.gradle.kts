@@ -42,3 +42,9 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // FrameScriptBridge: document-start scripts in the cross-origin Kakao frame.
+    // Same version webview_flutter_android builds against.
+    implementation("androidx.webkit:webkit:1.15.0")
+}

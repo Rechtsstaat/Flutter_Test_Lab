@@ -40,19 +40,6 @@ class AppStore extends ChangeNotifier {
       .where((listing) => listing.status == ListingStatus.closed)
       .toList();
 
-  /// How many listings 한방 registered this month — the number the completion
-  /// screen reports back as "이번 달, 한방이 대신 N번 등록했어요".
-  int get registeredThisMonth {
-    final now = DateTime.now();
-    return _listings
-        .where(
-          (listing) =>
-              listing.createdAt.year == now.year &&
-              listing.createdAt.month == now.month,
-        )
-        .length;
-  }
-
   Future<void> load() async {
     final file = await _resolve();
     try {
@@ -144,23 +131,35 @@ class AppStore extends ChangeNotifier {
     return null;
   }
 
-  /// 광고 종료 / 거래 완료 move the listing to the 성사된 광고 tab and mark the
-  /// picked channels removed; the untouched ones keep advertising.
+  /// 301 marks the picked channels removed; the untouched ones keep
+  /// advertising. 301 says "선택한 플랫폼에서만 광고가 내려갑니다", so the listing
+  /// only leaves 진행 중 once nothing is left live — or still waiting on the
+  /// agent's check — anywhere.
   Future<Listing> close(
     Listing listing, {
     required ClosedReason reason,
     required Set<ListingPlatform> channels,
   }) async {
+    final remaining = {
+      for (final entry in listing.channels.entries)
+        entry.key: channels.contains(entry.key)
+            ? ChannelState.removed
+            : entry.value,
+    };
+    final stillLive = remaining.values.any(
+      (state) =>
+          state == ChannelState.published || state == ChannelState.needsCheck,
+    );
+    final now = DateTime.now();
     final next = listing.copyWith(
-      channels: {
-        for (final entry in listing.channels.entries)
-          entry.key: channels.contains(entry.key)
-              ? ChannelState.removed
-              : entry.value,
+      channels: remaining,
+      channelDates: {
+        ...listing.channelDates,
+        for (final platform in channels) platform: now,
       },
-      status: ListingStatus.closed,
-      closedReason: reason,
-      closedAt: DateTime.now(),
+      status: stillLive ? ListingStatus.advertising : ListingStatus.closed,
+      closedReason: stillLive ? null : reason,
+      closedAt: stillLive ? null : now,
     );
     await save(next);
     return next;

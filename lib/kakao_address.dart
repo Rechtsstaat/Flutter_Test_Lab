@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'android_layout.dart';
+import 'design/components.dart';
 
 /// Address chosen in the Kakao Postcode service (keyless, free).
 /// https://postcode.map.kakao.com/guide
@@ -172,7 +173,7 @@ class _KakaoAddressSearchPageState extends State<KakaoAddressSearchPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('주소 검색')),
+    appBar: const BackTitleBar(title: '주소 검색'),
     body: _error != null
         ? Center(
             child: Padding(

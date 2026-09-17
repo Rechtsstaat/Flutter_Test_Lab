@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../android_layout.dart';
 import '../data/app_store.dart';
@@ -8,15 +9,12 @@ import '../design/components.dart';
 import '../design/tokens.dart';
 import '../fields.dart';
 import '../models/listing.dart';
+import 'home_page.dart' show stateColor;
 import 'listing_form_page.dart';
 import 'takedown_flow_page.dart';
 
-/// 102 매물 상세.
-///
-/// Two 확정 notes shape the bottom of this screen. 삭제 is split into 거래 완료 and
-/// 광고 종료 so the two stop sharing a word, and the pair is no longer pinned to
-/// the viewport — ending an ad is not the errand the agent opened this screen
-/// for, so it sits at the end of the record rather than over it.
+/// 102 매물상세 — the record, each platform's state, and the way out
+/// ("광고를 종료할래요" → 301).
 class ListingDetailPage extends StatefulWidget {
   const ListingDetailPage({
     super.key,
@@ -48,32 +46,30 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _edit(Listing listing) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => ListingFormPage(store: widget.store, initial: listing),
-      ),
-    );
-  }
+  void _edit(Listing listing) => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => ListingFormPage(store: widget.store, initial: listing),
+    ),
+  );
 
-  Future<void> _end(Listing listing, ClosedReason reason) async {
-    final channels = await showModalBottomSheet<Set<ListingPlatform>>(
+  Future<void> _end(Listing listing) async {
+    final picked = await showModalBottomSheet<Set<ListingPlatform>>(
       context: context,
-      backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _ChannelPickSheet(
-        reason: reason,
-        channels: listing.channels.keys.toList(),
+      backgroundColor: AppColor.bgSurface,
+      barrierColor: AppColor.scrim,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Radii.r24)),
       ),
+      builder: (_) => TakedownSheet(channels: listing.liveChannels),
     );
-    if (channels == null || channels.isEmpty || !mounted) return;
+    if (picked == null || picked.isEmpty || !mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => TakedownFlowPage(
           store: widget.store,
           listing: listing,
-          reason: reason,
-          channels: ListingPlatform.values.where(channels.contains).toList(),
+          channels: ListingPlatform.values.where(picked.contains).toList(),
         ),
       ),
     );
@@ -84,117 +80,69 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
     final listing = widget.store.byId(widget.listingId);
     if (listing == null) {
       return const Scaffold(
-        backgroundColor: Brand.canvas,
-        body: Center(child: Text('삭제된 매물이에요', style: Type.bodyMuted)),
+        backgroundColor: AppColor.bgPage,
+        appBar: BackTitleBar(title: '매물 상세'),
+        body: Center(child: Text('삭제된 매물이에요', style: AppText.bodySmall)),
       );
     }
-    final closed = listing.status == ListingStatus.closed;
+    final canEnd = listing.liveChannels.isNotEmpty;
 
     return Scaffold(
-      backgroundColor: Brand.canvas,
-      appBar: AppBar(
-        backgroundColor: Brand.canvas,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        leading: IconButton(
-          icon: const Icon(
-            Icons.chevron_left_rounded,
-            size: 30,
-            color: Brand.ink,
-          ),
-          onPressed: () => Navigator.of(context).maybePop(),
-        ),
-        title: const Text('매물 상세', style: Type.title),
-        centerTitle: false,
-        titleSpacing: 0,
+      backgroundColor: AppColor.bgPage,
+      appBar: BackTitleBar(
+        title: '매물 상세',
+        actions: [
+          if (listing.status == ListingStatus.advertising)
+            BarAction('수정', onPressed: () => _edit(listing)),
+        ],
       ),
       body: ListView(
         padding: EdgeInsets.zero + androidBottomInset(context),
         children: [
-          SizedBox(height: 240, child: _Gallery(paths: listing.photoPaths)),
+          SizedBox(height: 260, child: _Gallery(paths: listing.photoPaths)),
           Transform.translate(
-            offset: const Offset(0, -18),
+            offset: const Offset(0, -Space.s24),
             child: Container(
               decoration: const BoxDecoration(
-                color: Brand.surface,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                color: AppColor.bgSurface,
+                borderRadius: BorderRadius.vertical(
+                  top: Radius.circular(Radii.r24),
+                ),
               ),
               padding: const EdgeInsets.fromLTRB(
-                Insets.gutter,
-                22,
-                Insets.gutter,
-                24,
+                Space.gutter,
+                Space.s24,
+                Space.gutter,
+                Space.s32,
               ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  StatusChip(
-                    closed ? (listing.closedReason?.label ?? '성사됨') : '광고중',
-                    color: closed ? Brand.inkMuted : Brand.blue,
-                  ),
-                  const SizedBox(height: 12),
                   Text(
-                    listing.title,
-                    style: Type.display.copyWith(fontSize: 21),
+                    listing.fullName,
+                    style: AppText.title.copyWith(color: AppColor.textBrand),
                   ),
-                  const SizedBox(height: 6),
-                  Text(listing.priceLine, style: Type.price),
-                  const SizedBox(height: 8),
-                  Text(
-                    [
-                      listing.address,
-                      if ('${listing.values['unit'] ?? ''}'.isNotEmpty)
-                        '${listing.values['unit']}',
-                    ].where((part) => part.isNotEmpty).join(', '),
-                    style: Type.bodyMuted,
-                  ),
-                  const SizedBox(height: 22),
-                  _SpecGrid(values: listing.values),
-                  if ('${listing.values['description'] ?? ''}'.isNotEmpty) ...[
-                    const SizedBox(height: 22),
-                    Text(
-                      '${listing.values['description']}',
-                      style: Type.body.copyWith(color: Brand.inkMuted),
+                  const SizedBox(height: Space.s4),
+                  Text(listing.priceLine, style: AppText.bodySmall),
+                  const SizedBox(height: Space.s24),
+                  const Text('광고 상태', style: AppText.title),
+                  const SizedBox(height: Space.s12),
+                  _AdStateCard(listing: listing),
+                  for (final section in _sections(listing.values)) ...[
+                    const SectionRule(),
+                    Text(section.title, style: AppText.title),
+                    const SizedBox(height: Space.s12),
+                    _InfoCard(rows: section.rows),
+                  ],
+                  if (canEnd) ...[
+                    const SizedBox(height: Space.s24),
+                    BrandButton(
+                      '광고를 종료할래요',
+                      kind: BrandButtonKind.outlined,
+                      foreground: AppColor.statusError,
+                      onPressed: () => _end(listing),
                     ),
                   ],
-                  const SizedBox(height: 26),
-                  const SectionLabel('광고 중인 채널'),
-                  for (final entry in listing.channels.entries)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: _ChannelStatusRow(
-                        platform: entry.key,
-                        state: entry.value,
-                      ),
-                    ),
-                  const SizedBox(height: 28),
-                  if (!closed) ...[
-                    BrandButton(
-                      '수정',
-                      kind: BrandButtonKind.outlined,
-                      onPressed: () => _edit(listing),
-                    ),
-                    const SizedBox(height: 10),
-                    BrandButton(
-                      '거래 완료',
-                      onPressed: () => _end(listing, ClosedReason.dealDone),
-                    ),
-                    const SizedBox(height: 4),
-                    // 광고 종료 is deliberately the quietest control here: the
-                    // note asks for it not to read as a positive outcome.
-                    BrandButton(
-                      '광고 종료',
-                      kind: BrandButtonKind.quiet,
-                      onPressed: () => _end(listing, ClosedReason.adEnded),
-                    ),
-                  ] else
-                    Center(
-                      child: Text(
-                        '${listing.closedReason?.label ?? '성사'}로 내려간 광고예요.',
-                        style: Type.caption,
-                      ),
-                    ),
                 ],
               ),
             ),
@@ -205,46 +153,81 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
   }
 }
 
-class _Gallery extends StatelessWidget {
+class _Gallery extends StatefulWidget {
   const _Gallery({required this.paths});
 
   final List<String> paths;
 
   @override
+  State<_Gallery> createState() => _GalleryState();
+}
+
+class _GalleryState extends State<_Gallery> {
+  int _page = 0;
+
+  @override
   Widget build(BuildContext context) {
-    final files = paths
+    final files = widget.paths
         .map(File.new)
         .where((file) => file.existsSync())
         .toList();
-    if (files.isEmpty) {
-      return PhotoPlaceholder(label: '매물 사진 (${paths.length}장)', radius: 0);
-    }
+    final count = files.isEmpty ? 1 : files.length;
     return Stack(
       fit: StackFit.expand,
       children: [
-        PageView(
-          children: [
-            for (final file in files)
-              Image.file(
-                file,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => const PhotoPlaceholder(radius: 0),
-              ),
-          ],
+        if (files.isEmpty)
+          const PhotoPlaceholder(radius: 0, cell: 24)
+        else
+          PageView(
+            onPageChanged: (page) => setState(() => _page = page),
+            children: [
+              for (final file in files)
+                Image.file(
+                  file,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) =>
+                      const PhotoPlaceholder(radius: 0, cell: 24),
+                ),
+            ],
+          ),
+        Positioned(
+          top: Space.s12,
+          right: Space.s12,
+          child: Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: AppColor.bgSurface.withValues(alpha: 0.9),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.photo_library_outlined,
+              size: 18,
+              color: AppColor.iconBrand,
+            ),
+          ),
         ),
         Positioned(
-          right: 14,
-          bottom: 30,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: Brand.ink.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(Insets.radiusPill),
-            ),
-            child: Text(
-              '사진 ${files.length}장',
-              style: const TextStyle(color: Colors.white, fontSize: 11.5),
-            ),
+          left: 0,
+          right: 0,
+          bottom: Space.s32 + Space.s4,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              for (var i = 0; i < count.clamp(1, 8); i++)
+                AnimatedContainer(
+                  duration: Motion.quick,
+                  width: 5,
+                  height: 5,
+                  margin: const EdgeInsets.symmetric(horizontal: 2),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: i == _page
+                        ? AppColor.textSecondary
+                        : AppColor.indicatorInactive.withValues(alpha: 0.5),
+                  ),
+                ),
+            ],
           ),
         ),
       ],
@@ -252,122 +235,69 @@ class _Gallery extends StatelessWidget {
   }
 }
 
-/// The six-cell table the lo-fi puts under the price.
-class _SpecGrid extends StatelessWidget {
-  const _SpecGrid({required this.values});
+/// 광고 상태 — one row per platform with its state colour.
+class _AdStateCard extends StatelessWidget {
+  const _AdStateCard({required this.listing});
 
-  final Map<String, dynamic> values;
+  final Listing listing;
 
   @override
-  Widget build(BuildContext context) {
-    String at(String key, {String suffix = ''}) {
-      final raw = '${values[key] ?? ''}'.trim();
-      return raw.isEmpty ? '-' : '$raw$suffix';
-    }
-
-    final cells = <(String, String)>[
-      ('전용면적', at('exclusiveArea', suffix: 'm²')),
-      (
-        '층수',
-        values['floor'] == null && values['floorAll'] == null
-            ? '-'
-            : '${at('floor', suffix: '층')} / ${at('floorAll', suffix: '층')}',
-      ),
-      ('방/욕실', '${at('rooms', suffix: '개')} / ${at('bathrooms', suffix: '개')}'),
-      (
-        '관리비',
-        values['noManagementFee'] == true
-            ? '없음'
-            : at('managementFee', suffix: '만원'),
-      ),
-      (
-        '입주가능',
-        values['moveInType'] == '날짜 지정' ? at('moveInDate') : at('moveInType'),
-      ),
-      ('주차', at('parking')),
-    ];
-
-    return Column(
-      children: [
-        for (var row = 0; row < cells.length; row += 2)
-          Container(
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: row + 2 < cells.length
-                    ? const BorderSide(color: Brand.hairline)
-                    : BorderSide.none,
-              ),
-            ),
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (var column = 0; column < 2; column++)
-                  if (row + column < cells.length)
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(cells[row + column].$1, style: Type.caption),
-                          const SizedBox(height: 4),
-                          Text(
-                            cells[row + column].$2,
-                            style: Type.body.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => _Card(
+    children: [
+      for (final platform in ListingPlatform.values)
+        _AdStateRow(
+          platform: platform,
+          state: listing.channels[platform] ?? ChannelState.pending,
+          date: listing.channelDates[platform],
+        ),
+    ],
+  );
 }
 
-class _ChannelStatusRow extends StatelessWidget {
-  const _ChannelStatusRow({required this.platform, required this.state});
+class _AdStateRow extends StatelessWidget {
+  const _AdStateRow({
+    required this.platform,
+    required this.state,
+    required this.date,
+  });
 
   final ListingPlatform platform;
   final ChannelState state;
+  final DateTime? date;
 
   @override
   Widget build(BuildContext context) {
-    final (label, color) = switch (state) {
-      ChannelState.published => ('노출중', Brand.blue),
-      ChannelState.removed => ('내려감', Brand.inkFaint),
-      ChannelState.failed => ('확인 필요', Brand.danger),
-      _ => ('대기 중', Brand.inkFaint),
+    final color = stateColor(state);
+    final dateLabel = switch (state) {
+      ChannelState.published when date != null => '등록일 ${formatDate(date!)}',
+      ChannelState.removed when date != null => '종료일 ${formatDate(date!)}',
+      _ => null,
     };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: Brand.surface,
-        borderRadius: BorderRadius.circular(Insets.radiusField),
-        border: Border.all(color: Brand.hairline),
-      ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: Space.s12),
       child: Row(
         children: [
-          PlatformBadge(
-            platform,
-            size: 30,
-            dimmed: state == ChannelState.removed,
-          ),
-          const SizedBox(width: 12),
-          Text(
-            platform.label,
-            style: Type.body.copyWith(fontWeight: FontWeight.w600),
-          ),
-          const Spacer(),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: color,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(platform.label, style: AppText.bodyStrong),
+                if (dateLabel != null) Text(dateLabel, style: AppText.caption),
+              ],
             ),
+          ),
+          Text(
+            state.statusLabel,
+            style: AppText.bodySmall.copyWith(
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: Space.s4),
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: color),
           ),
         ],
       ),
@@ -375,110 +305,385 @@ class _ChannelStatusRow extends StatelessWidget {
   }
 }
 
-/// 301's opening question — "어느 채널에서 내릴까요?"
-class _ChannelPickSheet extends StatefulWidget {
-  const _ChannelPickSheet({required this.reason, required this.channels});
+String formatDate(DateTime date) =>
+    '${date.year}.${date.month.toString().padLeft(2, '0')}.${date.day.toString().padLeft(2, '0')}';
 
-  final ClosedReason reason;
-  final List<ListingPlatform> channels;
+/// A bordered card whose children are separated by hairlines.
+class _Card extends StatelessWidget {
+  const _Card({required this.children});
 
-  @override
-  State<_ChannelPickSheet> createState() => _ChannelPickSheetState();
-}
-
-class _ChannelPickSheetState extends State<_ChannelPickSheet> {
-  final _picked = <ListingPlatform>{};
+  final List<Widget> children;
 
   @override
   Widget build(BuildContext context) => Container(
-    decoration: const BoxDecoration(
-      color: Brand.surface,
-      borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+    padding: const EdgeInsets.symmetric(horizontal: Space.s16),
+    decoration: BoxDecoration(
+      color: AppColor.bgSurface,
+      borderRadius: BorderRadius.circular(Radii.r16),
+      border: Border.all(color: AppColor.borderSubtle),
     ),
-    padding: const EdgeInsets.fromLTRB(Insets.gutter, 24, Insets.gutter, 16),
-    child: SafeArea(
-      top: false,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+    child: Column(
+      children: [
+        for (final (index, child) in children.indexed) ...[
+          if (index > 0) const Divider(height: 1, color: AppColor.borderFaint),
+          child,
+        ],
+      ],
+    ),
+  );
+}
+
+/// One info row: one or two label/value cells.
+typedef _Cell = ({String label, String value, bool copy, bool plain});
+
+_Cell _cell(
+  String label,
+  String value, {
+  bool copy = false,
+  bool plain = false,
+}) => (label: label, value: value, copy: copy, plain: plain);
+
+class _InfoCard extends StatelessWidget {
+  const _InfoCard({required this.rows});
+
+  final List<List<_Cell>> rows;
+
+  @override
+  Widget build(BuildContext context) => _Card(
+    children: [
+      for (final row in rows)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: Space.s12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final (index, cell) in row.indexed) ...[
+                if (index > 0) const SizedBox(width: Space.s12),
+                Expanded(child: _InfoCell(cell)),
+              ],
+            ],
+          ),
+        ),
+    ],
+  );
+}
+
+class _InfoCell extends StatelessWidget {
+  const _InfoCell(this.cell);
+
+  final _Cell cell;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(cell.label, style: AppText.caption),
+      const SizedBox(height: 2),
+      Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('어느 채널에서 내릴까요?', style: Type.display),
-          const SizedBox(height: 8),
-          Text(
-            widget.reason == ClosedReason.dealDone
-                ? '거래가 끝난 채널을 선택해 주세요.'
-                : '선택한 채널에서만 광고가 내려갑니다.',
-            style: Type.bodyMuted,
+          if (cell.copy)
+            // A phone number reads wrong once it wraps; shrink it instead.
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(cell.value, style: AppText.bodyStrong),
+              ),
+            )
+          else
+            Expanded(
+              child: Text(
+                cell.value,
+                style: cell.plain ? AppText.body : AppText.bodyStrong,
+              ),
+            ),
+          if (cell.copy && cell.value != '-')
+            IconButton(
+              tooltip: '연락처 복사',
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: cell.value));
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('연락처를 복사했어요')));
+              },
+              icon: const Icon(
+                Icons.copy_rounded,
+                size: 16,
+                color: AppColor.iconSecondary,
+              ),
+            ),
+        ],
+      ),
+    ],
+  );
+}
+
+typedef _Section = ({String title, List<List<_Cell>> rows});
+
+List<_Section> _sections(Map<String, dynamic> v) {
+  String at(String key, {String suffix = ''}) {
+    final raw = v[key];
+    if (raw == null) return '-';
+    if (raw is List) {
+      return raw.isEmpty ? '-' : raw.map((e) => optionLabel('$e')).join(', ');
+    }
+    final text = '$raw'.trim();
+    return text.isEmpty ? '-' : '$text$suffix';
+  }
+
+  final floor = at('floor');
+  final floorAll = at('floorAll');
+  final appliances = List<String>.from(v['appliances'] as List? ?? const []);
+  final trade = '${v['trade'] ?? ''}';
+  final fee = v['noManagementFee'] == true;
+  final parking = v['parking'] == '주차 불가능';
+
+  return [
+    (
+      title: '기본 정보',
+      rows: [
+        [_cell('주소', at('address'))],
+        [
+          _cell(
+            '동, 호수',
+            [
+              v['singleBuilding'] == true ? '단일동' : at('building', suffix: '동'),
+              at('unit', suffix: '호'),
+            ].where((p) => p != '-').join(' ').ifEmpty('-'),
           ),
-          const SizedBox(height: 20),
+          _cell('건축물 법정 용도', at('buildingUse')),
+        ],
+        [
+          _cell('매물 종류', at('propertyType')),
+          _cell('사용승인일', at('approvalDate')),
+        ],
+        [
+          _cell('총 세대수', at(HifiField.householdCount)),
+          _cell('위반건축물 해당 여부', at('violation')),
+        ],
+      ],
+    ),
+    (
+      title: '거래 및 가격 정보',
+      rows: [
+        if (trade == '매매')
+          [_cell('거래 유형', '매매'), _cell('매매 금액', at('salePrice', suffix: '만원'))]
+        else
+          [
+            _cell('보증금', at('deposit', suffix: '만원')),
+            trade == '월세'
+                ? _cell('월세', at('monthlyRent', suffix: '만원'))
+                : _cell('거래 유형', trade.ifEmpty('-')),
+          ],
+        [
+          _cell(
+            '융자금',
+            v['loan'] == '없음' ? '없음' : at('loanAmount', suffix: '만원'),
+          ),
+          _cell(
+            '입주가능일',
+            v['moveInType'] == '날짜 지정' ? at('moveInDate') : at('moveInType'),
+          ),
+        ],
+        [_cell('입주가능일 추가 설명', at(HifiField.moveInNote), plain: true)],
+        [
+          _cell('전자계약 가능 여부', at(HifiField.eContract)),
+          _cell('LH 전세임대 여부', at('lh')),
+        ],
+        if (v['shortTerm'] == true) [_cell('단기 매물', '가능')],
+      ],
+    ),
+    (
+      title: '공간 및 건물 구조',
+      rows: [
+        [
+          _cell('전용면적', at('exclusiveArea', suffix: ' m²')),
+          _cell('공급면적', at('supplyArea', suffix: ' m²')),
+        ],
+        [
+          _cell(
+            '층 수',
+            floor == '-' && floorAll == '-'
+                ? '-'
+                : '$floor/${floorAll == '-' ? '-' : '$floorAll층'}'
+                      '${v['floorPrivate'] == true ? ' (비공개)' : ''}',
+          ),
+          _cell('층군 구분', at(HifiField.floorBand)),
+        ],
+        [
+          _cell(
+            '방 수 및 원룸 구조',
+            [
+              at('rooms', suffix: '개'),
+              at(HifiField.structure),
+            ].where((p) => p != '-').join(', ').ifEmpty('-'),
+          ),
+          _cell('복층 여부', at(HifiField.duplex)),
+        ],
+        [
+          _cell('욕실 수', at('bathrooms', suffix: '개')),
+          _cell('주실 방향', at('direction')),
+        ],
+        [_cell('현관 구조 유형', at(HifiField.entranceType))],
+      ],
+    ),
+    (
+      title: '관리비',
+      rows: fee
+          ? [
+              [_cell('부과 방식', '관리비 없음')],
+            ]
+          : [
+              [
+                _cell('부과 방식', at('manageMethod')),
+                _cell('기본 금액', at('managementFee', suffix: ' 만원')),
+              ],
+              [_cell('부과 기준', at('manageBasis'))],
+              [_cell('포함 목록', at('manageIncludes'))],
+            ],
+    ),
+    (
+      title: '시설 및 옵션',
+      rows: [
+        [
+          _cell(
+            '주차 가능 및 대 수',
+            parking ? '불가' : at('parkingCount', suffix: ' 대'),
+          ),
+          _cell(
+            '월 주차비',
+            parking ? '-' : at(HifiField.monthlyParkingFee, suffix: ' 만원'),
+          ),
+        ],
+        [_cell('엘리베이터 유무', at('elevator')), _cell('반려동물 허용', at('petAllowed'))],
+        [_cell('전세자금대출 가능 여부', at('loanAvailable'))],
+        [
+          _cell(
+            '기본 가전 옵션',
+            appliances
+                .where(homeApplianceOptions.contains)
+                .join(', ')
+                .ifEmpty('-'),
+          ),
+        ],
+        [
+          _cell(
+            '가구 및 수납 옵션',
+            appliances.where(furnitureOptions.contains).join(', ').ifEmpty('-'),
+          ),
+        ],
+        [
+          _cell(
+            '보안 및 부대시설',
+            List<String>.from(v['facilities'] as List? ?? const [])
+                .where((item) => item != evChargerFacility)
+                .map(optionLabel)
+                .join(', ')
+                .ifEmpty('-'),
+          ),
+        ],
+        [
+          _cell('난방 방식', at('heating')),
+          _cell('전기차 충전 설비', at(HifiField.evCharger)),
+        ],
+      ],
+    ),
+    (
+      title: '의뢰인 정보',
+      rows: [
+        [
+          _cell('임대인 성함', at(HifiField.ownerName)),
+          _cell('연락처', at('ownerPhone'), copy: true),
+        ],
+        [_cell('중개 수임 경로', at(HifiField.brokerageRoute))],
+        [_cell('내부 비밀 메모', at('privateMemo'), plain: true)],
+      ],
+    ),
+    if ('${v['title'] ?? ''}'.isNotEmpty ||
+        '${v['description'] ?? ''}'.isNotEmpty)
+      (
+        title: '광고 문구',
+        rows: [
+          [_cell('매물 제목', at('title'))],
+          [_cell('매물 상세 설명', at('description'), plain: true)],
+          if ((v[HifiField.tags] as List?)?.isNotEmpty ?? false)
+            [_cell('관심 태그', at(HifiField.tags))],
+        ],
+      ),
+  ];
+}
+
+extension on String {
+  String ifEmpty(String fallback) => isEmpty ? fallback : this;
+}
+
+/// 301/302 "어느 플랫폼에서 내릴까요?"
+class TakedownSheet extends StatefulWidget {
+  const TakedownSheet({super.key, required this.channels});
+
+  final List<ListingPlatform> channels;
+
+  @override
+  State<TakedownSheet> createState() => _TakedownSheetState();
+}
+
+class _TakedownSheetState extends State<TakedownSheet> {
+  final _picked = <ListingPlatform>{};
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    top: false,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(
+        Space.gutter,
+        Space.s12,
+        Space.gutter,
+        Space.s8,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColor.borderDefault,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: Space.s24),
+          const Text('어느 플랫폼에서 내릴까요?', style: AppText.title),
+          const SizedBox(height: Space.s4),
+          const Text('선택한 플랫폼에서만 광고가 내려갑니다.', style: AppText.bodySmall),
+          const SizedBox(height: Space.s16),
           for (final platform in widget.channels)
             Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: GestureDetector(
+              padding: const EdgeInsets.only(bottom: Space.s8),
+              child: SelectCard(
+                platform: platform,
+                selected: _picked.contains(platform),
                 onTap: () => setState(() {
                   if (!_picked.remove(platform)) _picked.add(platform);
                 }),
-                child: AnimatedContainer(
-                  duration: Motion.quick,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 13,
-                  ),
-                  decoration: BoxDecoration(
-                    color: _picked.contains(platform)
-                        ? Brand.blueFaint
-                        : Brand.surface,
-                    borderRadius: BorderRadius.circular(Insets.radiusCard),
-                    border: Border.all(
-                      color: _picked.contains(platform)
-                          ? Brand.blue
-                          : Brand.hairline,
-                      width: _picked.contains(platform) ? 1.4 : 1,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      PlatformBadge(platform, size: 36),
-                      const SizedBox(width: 14),
-                      Text(platform.label, style: Type.title),
-                      const Spacer(),
-                      AnimatedScale(
-                        duration: Motion.quick,
-                        curve: Motion.settle,
-                        scale: _picked.contains(platform) ? 1 : 0.86,
-                        child: Container(
-                          width: 24,
-                          height: 24,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: _picked.contains(platform)
-                                ? Brand.blue
-                                : const Color(0xfff0f1f3),
-                          ),
-                          child: Icon(
-                            Icons.check_rounded,
-                            size: 16,
-                            color: _picked.contains(platform)
-                                ? Colors.white
-                                : const Color(0xffd3d6da),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
               ),
             ),
-          const SizedBox(height: 10),
+          const SizedBox(height: Space.s12),
           BrandButton(
-            _picked.isEmpty ? '채널을 선택해 주세요' : '${_picked.length}개 채널에서 내리기',
+            _picked.isEmpty ? '플랫폼을 선택해주세요' : '광고 종료하기',
             onPressed: _picked.isEmpty
                 ? null
-                : () => Navigator.pop(context, _picked),
+                : () => Navigator.pop(context, Set.of(_picked)),
           ),
           BrandButton(
             '취소',
-            kind: BrandButtonKind.quiet,
+            kind: BrandButtonKind.text,
             onPressed: () => Navigator.pop(context),
           ),
         ],

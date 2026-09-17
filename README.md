@@ -19,11 +19,11 @@
 
 현재 확인할 수 있는 범위:
 
-- 통합 매물 입력 폼과 테스트 데이터 자동 채우기
-- 조건부 필수값 및 일부 입력 규칙 검증
-- 필수값 완료 시 `직방에 보내기`·`다방에 보내기`·`당근에 보내기` 버튼 활성화
-- 직방·다방·당근 재현 폼으로 플랫폼별 값 전달
-- WebView DOM 재확인을 통한 입력 성공 여부 표시
+- 「한,방 디자인」 Figma의 `02_하이파이` 화면 흐름과 디자인 시스템(Seed Palette·Semantic Color·Foundation v0.2) 적용 — 아래 「화면 흐름」
+- 통합 매물 입력 폼(하이파이의 7개 섹션 + 플랫폼 선택)과 테스트 데이터 자동 채우기
+- 조건부 필수값 및 일부 입력 규칙 검증, 남은 필수 항목 안내
+- 한 번의 「광고 등록」으로 선택한 플랫폼을 차례로 진행하는 Process Hub
+- 직방·다방·당근 재현 폼으로 플랫폼별 값 전달, WebView DOM 재확인을 통한 입력 성공 여부 표시
 - 직방·다방 양쪽의 주소 검색을 WebView 안의 전체 화면 카카오 우편번호 화면으로 표시
 - 통합 폼 주소와 비교해 카카오 검색 결과를 자동 선택 (판단이 서지 않으면 맨 위 항목)
 - 주소 선택 후 이어지는 화면 처리 — 다방은 동·호 입력과 건축물대장 창, 직방은 소재지 공개 확인 창
@@ -32,15 +32,43 @@
 - 선택한 사진을 다방·당근 미러에 자동 첨부 (당근은 PNG·JPEG·GIF·WebP만, 그 밖의 형식은 건너뛰고 사유 표시)
 - 플랫폼에 대응하는 필드가 없거나 브라우저 보안상 자동화할 수 없는 항목의 사유 표시
 
+### 화면 흐름
+
+`02_하이파이` 의 overview 프레임이 정한 흐름을 따릅니다. 8단계로 나눈 등록 폼 변형은 파일에 「이거 보지 마세요」로 표시돼 있어 반영하지 않았습니다.
+
+| 흐름 | 화면 |
+|---|---|
+| 최초 진입 | 000 스플래시(점 세 개가 합쳐지는 모션, 약 2.5초 뒤 220ms 디졸브) → 001 플랫폼 연동 선택 → 0011 플랫폼별 로그인 웹뷰 → 002 연동 완료 → 101 홈 |
+| 광고 등록 | 101 → 201 광고 입력 폼 → 202·203 광고 입력(Process Hub) → 204 등록 완료 |
+| 예외 | 205 확인 필요 → 2051 확인하기-웹뷰 / 206 시스템 오류 → 2061 재시도 → 2062 일부 성공 |
+| 광고 종료 | 101 → 102 매물상세 → 301·302 플랫폼 선택 바텀시트 → 3021 광고 종료-웹뷰 → 303 종료 완료 |
+
+상태 색은 overview 의 약속 그대로입니다 — 등록 완료·광고 중 `status/success`, 입력 중 `action/primary`, 입력 대기·미등록 `text/disabled`, 확인 필요 `status/warning`, 연결 오류 `status/error`.
+
+### 네이티브 안의 웹뷰
+
+등록하는 동안 화면은 계속 한방이 쥐고 있고, 플랫폼 페이지는 그 아래에서 돌아갑니다(`lib/mirror_session.dart`, `lib/screens/publish_flow_page.dart`).
+
+- 플랫폼마다 `MirrorSession` 이 WebView 를 하나 갖고 페이지 로드·어댑터 실행·사진 첨부를 맡습니다. WebView 는 흐름이 끝날 때까지 **항상 화면 트리에 붙어 있고**(창에서 떨어진 WKWebView 는 타이머가 느려집니다), 허브가 그 위를 덮고 있다가 필요할 때 걷힙니다.
+- 「입력 과정 보기」를 누르면 허브가 내려가고 입력되는 모습이 그대로 보입니다(2021, 「입력이 끝날 때 까지 잠시만 기다려주세요」 토스트).
+- 어댑터가 끝나면 한방이 스스로 페이지를 올리고 「입력이 끝났어요 / 등록하기 버튼을 직접 눌러주세요」를 띄웁니다(2023). **플랫폼의 등록 버튼은 사람이 누릅니다.** 한방은 페이지에 넣어 둔 감시 스크립트로 그 누름(`isTrusted` 인 클릭만)을 듣고 다음 플랫폼으로 넘어갑니다. 버튼 이름은 미러 저장소 기준 직방 「매물 등록 완료」, 다방 「등록 완료」, 당근 「매물 등록하기」입니다.
+- 등록을 누르지 않고 돌아오면 그 플랫폼은 「확인이 필요해요」(205)가 되고 다음 플랫폼이 시작됩니다. 「확인하기」는 채워 둔 그 페이지를 다시 올립니다(2051). 어댑터가 채우지 못한 항목은 페이지 오른쪽 위 「확인할 항목 / 참고 사항」 칩에서 볼 수 있습니다.
+- 페이지가 뜨지 않거나 3분 안에 입력이 끝나지 않으면 「연결이 어려워요 · 다시시도」(206), 한 번 더 실패하면 「나중에 다시 시도해주세요」(2062)입니다.
+- 「등록된 광고 보기」(2022)와 광고 종료(3021)는 각 미러의 광고 관리 화면을 엽니다. 종료는 직방 「매물 종료하기」, 다방 「광고 종료」를 누르면 감지합니다. 당근 미러에는 아직 종료 버튼이 수집되지 않아, 뒤로 가기에서 「그대로 두기」를 고르면 광고를 유지한 채 넘어갑니다.
+- 미러는 로그인 뒤 화면부터 수집돼 있어서, 0011 은 WebView 안에 **임시 로그인 화면**을 띄우고 로그인 뒤 플랫폼 대시보드가 열리면 연동으로 봅니다. 이 화면은 입력값을 어디에도 보내지 않고 넘어가기 전에 지웁니다. 실제 서비스에서는 각 플랫폼의 로그인 페이지로 바꿔야 합니다.
+
 ### 주소 검색
 
 직방·다방 미러는 주소를 카카오 우편번호 서비스로 받습니다(당근은 아래 「당근 미러」 참고). 카카오의 `Postcode.open()` 은 `window.open()` 으로 별도 창을 띄우는데, WKWebView 에는 팝업 창이 없어 그 요청이 같은 웹 뷰에 실리면서 미러 폼이 빈 화면으로 덮였습니다. 지금은 `daum.Postcode` 를 감싸 두고 `open()` 요청을 **같은 인스턴스의 `embed()`** 로 바꿔, 페이지 안에 세운 전체 화면 겹에 그립니다. 미러가 넘긴 `oncomplete` 를 그대로 살려 두므로 주소를 고른 뒤의 흐름(다방의 동·호 활성화와 건축물대장 창, 직방의 주소 칸 채움과 소재지 공개 확인 창)이 원래대로 이어집니다. 기기의 뒤로 가기는 이 겹을 먼저 닫습니다.
 
-검색 결과 선택까지 자동입니다. 카카오 결과 목록은 `postcode.map.kakao.com` 에서 온 **교차 출처 iframe** 안에 있어, 미러 페이지에서 실행하는 스크립트로는 읽을 수도 누를 수도 없습니다(`WebViewController.runJavaScript` 는 최상위 프레임만 닿습니다). 그래서 WKWebView 가 제공하는 `WKUserScript(forMainFrameOnly: false)` 로 **그 프레임 안에서** 도는 스크립트를 넣습니다. webview_flutter 가 `WKWebViewConfiguration` 을 밖으로 내주지 않으므로, 플러그인이 JavaScript 채널을 등록할 때 쓰는 `addScriptMessageHandler:name:` 을 바꿔 끼워 같은 content controller 를 잡습니다 (`ios/Runner/FrameScriptBridge.swift`).
+검색 결과 선택까지 자동입니다. 카카오 결과 목록은 `postcode.map.kakao.com` 에서 온 **교차 출처 iframe** 안에 있어, 미러 페이지에서 실행하는 스크립트로는 읽을 수도 누를 수도 없습니다(`WebViewController.runJavaScript` 는 최상위 프레임만 닿습니다). 그래서 **그 프레임 안에서** 도는 스크립트를 플랫폼마다 네이티브로 넣습니다.
+
+- **iOS**: WKWebView 의 `WKUserScript(forMainFrameOnly: false)` 를 씁니다. webview_flutter 가 `WKWebViewConfiguration` 을 밖으로 내주지 않으므로, 플러그인이 JavaScript 채널을 등록할 때 쓰는 `addScriptMessageHandler:name:` 을 바꿔 끼워 같은 content controller 를 잡습니다 (`ios/Runner/FrameScriptBridge.swift`).
+- **Android**: AndroidX WebKit 의 `WebViewCompat.addDocumentStartJavaScript` 를 씁니다. Dart 쪽이 `AndroidWebViewController.webViewIdentifier` 를 넘기면 `WebViewFlutterAndroidExternalApi.getWebView` 로 그 WebView 를 찾아, 카카오 출처(`kakaoPostcodeOrigins`)의 프레임에만 스크립트를 넣습니다 (`android/app/src/main/kotlin/.../FrameScriptBridge.kt`). 문서가 시작될 때 들어가므로 스크립트는 `DOMContentLoaded` 까지 기다렸다가 돕니다.
 
 프레임 안 스크립트는 카카오가 각 후보에 붙여 둔 한글 주소(`span.txt_address[data-addr]`)를 통합 폼 주소와 견줍니다. 시·도 축약형(`서울` ↔ `서울특별시`)을 맞추고 괄호 안 건물명을 뺀 뒤, 앞에서부터 겹치는 길이와 번지 일치 여부로 점수를 매겨 가장 높은 후보를 누릅니다. 점수가 같거나 판단 근거가 없으면 카카오가 관련도 순으로 준 **맨 위 항목**을 고릅니다. 도로명 하나에 지번이 여럿이면 뒤따르는 지번 선택 화면도 같은 기준으로 한 번 더 고릅니다.
 
-자동 선택은 **앱이 넣은 검색어 그대로일 때 한 번만** 동작합니다. 사용자가 검색창을 고쳐 다른 곳을 찾으면 그 선택은 건드리지 않습니다. 자동 선택이 되지 않는 환경(안드로이드 등)에서는 화면이 그대로 떠 있어 직접 고르면 되고, 결과 화면 상태줄에 `주소 자동 선택` 표시로 어느 쪽인지 알려 줍니다.
+자동 선택은 **앱이 넣은 검색어 그대로일 때 한 번만** 동작합니다. 사용자가 검색창을 고쳐 다른 곳을 찾으면 그 선택은 건드리지 않습니다. 자동 선택이 되지 않는 환경(문서 시작 스크립트를 지원하지 않는 오래된 Android System WebView 등)에서는 화면이 그대로 떠 있어 직접 고르면 되고, 결과 화면 상태줄에 `주소 자동 선택` 표시로 어느 쪽인지 알려 줍니다.
 
 다방의 건축물대장 자동 조회 창은 이미 입력한 면적·용도·승인일이 공공데이터 값으로 덮어써지지 않도록 「직접 입력」으로 닫고 그 사실을 제한 사유에 남깁니다.
 
@@ -103,10 +131,16 @@ flutter test integration_test/dabang_photo_upload_test.dart -d '<시뮬레이터
 
 | 경로 | 설명 |
 |---|---|
-| `lib/main.dart` | 통합 입력 폼, 검증, 카카오 주소 검색 브리지, 직방·다방·당근 WebView 주입 및 결과 표시 |
+| `lib/main.dart` | 앱 진입점과 테마 |
+| `lib/design/tokens.dart` · `lib/design/components.dart` | 하이파이 디자인 시스템(색·타이포·간격·라운드·모션)과 공용 컴포넌트 |
+| `lib/screens/` | 000~303 화면 (스플래시, 온보딩, 홈, 입력 폼, Process Hub, 상세, 광고 종료) |
+| `lib/mirror_session.dart` | 플랫폼 페이지를 담는 WebView 세션, 등록·종료 버튼 감지, 임시 로그인 화면 |
+| `lib/remote_form.dart` | 카카오 주소 검색 브리지와 직방·다방·당근 어댑터 스크립트 |
+| `lib/fields.dart` | 50개 마스터 항목, 하이파이 추가 항목, 플랫폼별 미러 주소 |
 | `lib/photo_transfer.dart` | 다방·당근 미러의 사진 선택란으로 사진을 전달하는 브리지 |
 | `assets/zigbang/zigbang_listing_form.html` | 초기 실험에 쓰던 로컬 직방 재현 폼 (현재 코드는 원격 미러를 사용) |
 | `ios/Runner/FrameScriptBridge.swift` | 교차 출처 iframe 안까지 스크립트를 넣는 WKWebView 브리지 |
+| `android/app/src/main/kotlin/com/example/jibang_listing_test/FrameScriptBridge.kt` | 같은 일을 하는 Android WebView 브리지 (AndroidX WebKit 문서 시작 스크립트) |
 | `test/form_spec_test.dart` | 폼 사양 및 어댑터 테스트 |
 | `integration_test/daangn_form_injection_test.dart` | 당근 미러 실제 주입 결과를 DOM으로 확인하는 시뮬레이터 테스트 |
 | `부동산3사_통합_기능명세서.md` | 당근·다방·직방 통합 필드 및 기능 명세 |
