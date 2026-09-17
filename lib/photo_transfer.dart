@@ -40,13 +40,26 @@ Future<String> validateListingPhoto(XFile photo) async {
   );
 }
 
-/// The mirror owns the upload handler and its cards. Never synthesize cards or
-/// success: a file is complete only once that handler creates a ready data-id.
-String dabangPhotoBridgeScript() => r'''
-(() => {
-  try {
-  if (location.hostname !== 'mirror-dimension-lab.pages.dev' ||
-      !location.pathname.startsWith('/dabang/form/room/')) throw new Error('다방 미러 등록 폼이 아닙니다.');
+const _validatedPhotoTypes = {
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/bmp',
+  'image/webp',
+  'image/heic',
+  'image/avif',
+};
+
+/// A mirror form whose own upload handler receives the listing photos.
+///
+/// Each target tells the shared bridge where its photo input is, which nodes
+/// are its photo cards and when a card has finished uploading.
+enum PhotoTarget {
+  dabang(
+    label: '다방',
+    formPath: '/dabang/form/room/',
+    acceptedTypes: _validatedPhotoTypes,
+    locators: r'''
   // The mirror can render this input outside the expected section and gives it
   // generated class names. Locate it by native properties rather than CSS
   // structure or generated class names.
@@ -58,18 +71,79 @@ String dabangPhotoBridgeScript() => r'''
     }
     return null;
   };
+  const validInput = el => !!el && el.multiple && el.accept === 'image/*';
   const cards = () => [...document.querySelectorAll('section#visual_info [class*="SortableContainer"] [data-index]')];
-  if (!input() || !input().multiple || input().accept !== 'image/*') {
-    throw new Error('다방 일반 사진 선택란을 찾지 못했습니다.');
+  const cardId = card => card.dataset.id || null;
+  const settled = card => !!card.dataset.id && card.getAttribute('aria-disabled') === 'false';
+  const busy = () => false;
+''',
+  ),
+  daangn(
+    label: '당근',
+    formPath: '/daangn/form/article/',
+    // The Daangn mirror drops any file whose type is not in its accept list.
+    acceptedTypes: {'image/png', 'image/jpeg', 'image/gif', 'image/webp'},
+    locators: r'''
+  // 사진 칸(#image-upload) 옆의 상자가 자리표시 → 격자로 바뀌고, 올리는 동안
+  // cursor-not-allowed 로 잠긴다. 다 올라간 칸은 sortable 이 되고 data-mirror-key 를 받는다.
+  const input = () => document.getElementById('image-upload');
+  const validInput = el => !!el && el.multiple && /(^|,)image\//.test(el.accept || '');
+  const box = () => {
+    const el = input();
+    return el && el.parentElement ? el.parentElement.querySelector('.transition-all') : null;
+  };
+  const cards = () => {
+    const grid = box() && box().querySelector('div.grid');
+    return grid ? [...grid.querySelectorAll('[aria-roledescription="sortable"], .aspect-square')] : [];
+  };
+  const cardId = card => card.getAttribute('data-mirror-key');
+  const settled = card => card.getAttribute('aria-roledescription') === 'sortable' && !!cardId(card);
+  const busy = () => !!box() && box().classList.contains('cursor-not-allowed');
+''',
+  );
+
+  const PhotoTarget({
+    required this.label,
+    required this.formPath,
+    required this.acceptedTypes,
+    required this.locators,
+  });
+
+  final String label;
+  final String formPath;
+
+  /// MIME types this mirror's upload handler keeps. Other photos are skipped
+  /// with a reason instead of failing the whole transfer.
+  final Set<String> acceptedTypes;
+
+  /// JavaScript defining `input`, `validInput`, `cards`, `cardId`, `settled`
+  /// and `busy` for [listingPhotoBridgeScript].
+  final String locators;
+}
+
+/// The mirror owns the upload handler and its cards. Never synthesize cards or
+/// success: a file is complete only once that handler settles a new card.
+String listingPhotoBridgeScript(PhotoTarget target) =>
+    '''
+(() => {
+  try {
+  const LABEL = ${jsonEncode(target.label)};
+  if (location.hostname !== 'mirror-dimension-lab.pages.dev' ||
+      !location.pathname.startsWith(${jsonEncode(target.formPath)})) throw new Error(LABEL + ' 미러 등록 폼이 아닙니다.');
+${target.locators}$_photoBridgeBody''';
+
+const _photoBridgeBody = r'''
+  if (!validInput(input())) {
+    throw new Error(LABEL + ' 일반 사진 선택란을 찾지 못했습니다.');
   }
   if (typeof File !== 'function' || typeof DataTransfer !== 'function') throw new Error('이 WebView는 사진 파일 전달을 지원하지 않습니다. 운영체제와 앱을 업데이트해 주세요.');
   const bridge = window.__flrPhotos = {
     chunks: [], before: [], beforeCount: 0, size: 0, metadata: null,
     begin(metadata, remaining) {
       const existing = cards();
-      if (existing.length + remaining > 20) throw new Error('다방에 이미 있는 사진과 선택한 사진의 합계가 20장을 넘습니다.');
-      if (existing.some(c => !c.dataset.id || c.getAttribute('aria-disabled') !== 'false')) throw new Error('다방에서 다른 사진을 처리 중입니다. 완료 후 다시 시도해 주세요.');
-      this.before = existing.map(c => c.dataset.id);
+      if (existing.length + remaining > 20) throw new Error(LABEL + '에 이미 있는 사진과 선택한 사진의 합계가 20장을 넘습니다.');
+      if (busy() || existing.some(c => !settled(c))) throw new Error(LABEL + '에서 다른 사진을 처리 중입니다. 완료 후 다시 시도해 주세요.');
+      this.before = existing.map(cardId);
       this.beforeCount = existing.length;
       this.chunks = []; this.size = 0; this.metadata = metadata;
       return {count: existing.length};
@@ -98,11 +172,10 @@ String dabangPhotoBridgeScript() => r'''
     },
     status() {
       const current = cards();
-      const fresh = current.filter(c => c.dataset.id && !this.before.includes(c.dataset.id));
-      const ready = current.length === this.beforeCount + 1 && fresh.length === 1 &&
-        fresh[0].getAttribute('aria-disabled') === 'false' &&
-        current.every(c => c.dataset.id && c.getAttribute('aria-disabled') === 'false');
-      return {ready, count: current.length, id: ready ? fresh[0].dataset.id : null};
+      const fresh = current.filter(c => cardId(c) && !this.before.includes(cardId(c)));
+      const ready = !busy() && current.length === this.beforeCount + 1 && fresh.length === 1 &&
+        current.every(settled);
+      return {ready, count: current.length, id: ready ? cardId(fresh[0]) : null};
     },
     clear() { this.chunks = []; this.metadata = null; return {cleared: true}; }
   };
@@ -113,7 +186,7 @@ String dabangPhotoBridgeScript() => r'''
 })()
 ''';
 
-String dabangPhotoCommand(
+String listingPhotoCommand(
   String method, [
   List<Object?> arguments = const [],
 ]) =>
@@ -127,15 +200,20 @@ typedef PhotoJavaScriptRunner = Future<Object> Function(String script);
 /// Each bridge call is bounded and awaited. The browser's staging buffer holds
 /// only the current file (at most 96 KiB per call from the native stream).
 /// The mirror retains already uploaded files for its photo cards separately.
-Future<void> transferDabangPhotos({
+///
+/// Photos whose format [target] does not take are skipped rather than failing
+/// the batch. The returned list holds one reason per skipped photo.
+Future<List<String>> transferListingPhotos({
+  required PhotoTarget target,
   required List<XFile> photos,
   required PhotoJavaScriptRunner evaluate,
   required void Function(int completed, int total) onProgress,
   bool Function()? isCancelled,
   Duration timeout = const Duration(seconds: 45),
 }) async {
+  final label = target.label;
   if (photos.isEmpty || photos.length > 20) {
-    throw const FormatException('다방에 첨부할 실제 사진 1~20장을 선택해 주세요.');
+    throw FormatException('$label에 첨부할 실제 사진 1~20장을 선택해 주세요.');
   }
   Future<Map<String, dynamic>> run(String operation, String script) async {
     if (isCancelled?.call() == true) throw StateError('사진 전송이 취소되었습니다.');
@@ -143,7 +221,7 @@ Future<void> transferDabangPhotos({
     try {
       result = await evaluate(script);
     } catch (error) {
-      throw StateError('다방 WebView $operation JavaScript 실행 실패: $error');
+      throw StateError('$label WebView $operation JavaScript 실행 실패: $error');
     }
     // Android and WKWebView differ in whether returned strings are JSON quoted.
     Map<String, dynamic> data;
@@ -153,35 +231,60 @@ Future<void> transferDabangPhotos({
       }
       data = Map<String, dynamic>.from(result as Map);
     } catch (error) {
-      throw StateError('다방 WebView $operation 응답 해석 실패: $error');
+      throw StateError('$label WebView $operation 응답 해석 실패: $error');
     }
     if (data['error'] != null) {
-      throw StateError('다방 WebView $operation 오류: ${data['error']}');
+      throw StateError('$label WebView $operation 오류: ${data['error']}');
     }
     return data;
   }
 
+  // Sort out what the target takes before touching the WebView, so the
+  // bridge's 20-photo check counts only the photos that will really arrive.
+  final accepted = <({int number, XFile photo, String mime})>[];
+  final skipped = <String>[];
+  for (var index = 0; index < photos.length; index++) {
+    final photo = photos[index];
+    final String mime;
+    try {
+      mime = await validateListingPhoto(photo);
+    } catch (error) {
+      throw StateError('${index + 1}번 사진 (${photo.name}) 전송 실패: $error');
+    }
+    if (target.acceptedTypes.contains(mime)) {
+      accepted.add((number: index + 1, photo: photo, mime: mime));
+    } else {
+      final kinds = target.acceptedTypes
+          .map((type) => type.split('/').last.toUpperCase())
+          .join('·');
+      skipped.add(
+        '${index + 1}번 사진 (${photo.name}): $label 미러는 $kinds 사진만 받아 '
+        '${mime.split('/').last.toUpperCase()} 사진은 첨부하지 않았습니다. 화면에서 직접 올려 주세요.',
+      );
+    }
+  }
+  if (accepted.isEmpty) return skipped;
+
   final bridgeStart = Stopwatch()..start();
   while (true) {
     try {
-      await run('사진 첨부 초기화', dabangPhotoBridgeScript());
+      await run('사진 첨부 초기화', listingPhotoBridgeScript(target));
       break;
     } catch (error) {
       if (bridgeStart.elapsed >= const Duration(seconds: 20)) {
-        throw StateError('다방 사진 선택란이 준비되지 않았습니다: $error');
+        throw StateError('$label 사진 선택란이 준비되지 않았습니다: $error');
       }
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
   }
-  onProgress(0, photos.length);
+  onProgress(0, accepted.length);
   try {
-    for (var index = 0; index < photos.length; index++) {
-      final photo = photos[index];
+    for (var index = 0; index < accepted.length; index++) {
+      final (:number, :photo, :mime) = accepted[index];
       try {
-        final mime = await validateListingPhoto(photo);
         await run(
-          '${index + 1}번 사진 전송 시작',
-          dabangPhotoCommand('begin', [
+          '$number번 사진 전송 시작',
+          listingPhotoCommand('begin', [
             {
               'name': photo.name,
               'type': mime,
@@ -189,7 +292,7 @@ Future<void> transferDabangPhotos({
               'lastModified':
                   (await photo.lastModified()).millisecondsSinceEpoch,
             },
-            photos.length - index,
+            accepted.length - index,
           ]),
         );
         await for (final chunk in photo.openRead()) {
@@ -199,37 +302,38 @@ Future<void> transferDabangPhotos({
                 ? offset + chunkSize
                 : chunk.length;
             await run(
-              '${index + 1}번 사진 데이터 추가',
-              dabangPhotoCommand('append', [
+              '$number번 사진 데이터 추가',
+              listingPhotoCommand('append', [
                 base64Encode(chunk.sublist(offset, end)),
               ]),
             );
           }
         }
-        await run('${index + 1}번 사진 선택 이벤트 전달', dabangPhotoCommand('commit'));
+        await run('$number번 사진 선택 이벤트 전달', listingPhotoCommand('commit'));
         final watch = Stopwatch()..start();
         while (true) {
           final state = await run(
-            '${index + 1}번 사진 카드 완료 상태 확인',
-            dabangPhotoCommand('status'),
+            '$number번 사진 카드 완료 상태 확인',
+            listingPhotoCommand('status'),
           );
           if (state['ready'] == true) break;
           if (watch.elapsed >= timeout) {
             throw StateError(
-              '다방 사진 카드의 처리 완료를 확인하지 못했습니다. 현재 ${state['count']}장입니다. 사진 형식 또는 미러 오류를 확인해 주세요.',
+              '$label 사진 카드의 처리 완료를 확인하지 못했습니다. 현재 ${state['count']}장입니다. 사진 형식 또는 미러 오류를 확인해 주세요.',
             );
           }
           await Future<void>.delayed(const Duration(milliseconds: 250));
         }
-        onProgress(index + 1, photos.length);
+        onProgress(index + 1, accepted.length);
       } catch (error) {
-        throw StateError('${index + 1}번 사진 (${photo.name}) 전송 실패: $error');
+        throw StateError('$number번 사진 (${photo.name}) 전송 실패: $error');
       }
     }
   } finally {
     // Preserve uploaded cards on a partial failure, but release staging bytes.
     try {
-      await run('사진 전송 임시 데이터 정리', dabangPhotoCommand('clear'));
+      await run('사진 전송 임시 데이터 정리', listingPhotoCommand('clear'));
     } catch (_) {}
   }
+  return skipped;
 }

@@ -8,14 +8,35 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import 'photo_transfer.dart';
 
-enum ListingPlatform { zigbang, dabang }
+enum ListingPlatform { zigbang, dabang, daangn }
 
 extension ListingPlatformConfig on ListingPlatform {
-  String get label => this == ListingPlatform.zigbang ? '직방' : '다방';
+  String get label => switch (this) {
+    ListingPlatform.zigbang => '직방',
+    ListingPlatform.dabang => '다방',
+    ListingPlatform.daangn => '당근',
+  };
 
-  String get formUrl => this == ListingPlatform.zigbang
-      ? 'https://mirror-dimension-lab.pages.dev/zigbang/form/oneroom/'
-      : 'https://mirror-dimension-lab.pages.dev/dabang/form/room/';
+  String get formUrl => switch (this) {
+    ListingPlatform.zigbang =>
+      'https://mirror-dimension-lab.pages.dev/zigbang/form/oneroom/',
+    ListingPlatform.dabang =>
+      'https://mirror-dimension-lab.pages.dev/dabang/form/room/',
+    ListingPlatform.daangn =>
+      'https://mirror-dimension-lab.pages.dev/daangn/form/article/',
+  };
+
+  /// The mirror whose own upload handler takes the selected photos, if any.
+  PhotoTarget? get photoTarget => switch (this) {
+    ListingPlatform.zigbang => null,
+    ListingPlatform.dabang => PhotoTarget.dabang,
+    ListingPlatform.daangn => PhotoTarget.daangn,
+  };
+
+  /// Zigbang and Dabang search addresses through the Kakao postcode window.
+  /// Daangn searches its own same-origin endpoint inside the page, so its
+  /// adapter picks the result itself.
+  bool get usesKakaoPostcode => this != ListingPlatform.daangn;
 }
 
 enum InputType {
@@ -569,7 +590,7 @@ final List<FieldGroup> groups = [
       label: '매물 사진 첨부',
       type: InputType.photoPicker,
       example: '0',
-      unavailableReason: '사진은 선택 사항입니다. 선택한 사진은 다방 미러에 자동 첨부되며, 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다.',
+      unavailableReason: '사진은 선택 사항입니다. 선택한 사진은 다방·당근 미러에 자동 첨부되며, 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다.',
     ),
     MasterField(
       number: 46,
@@ -856,7 +877,7 @@ class _ListingFormPageState extends State<ListingFormPage> {
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
-        const Text('직방 전송에서는 지원하지 않는 항목을 결과에서 명확히 안내합니다.'),
+        const Text('플랫폼마다 지원하지 않는 항목은 전송 결과에서 명확히 안내합니다.'),
         if (error != null)
           Padding(
             padding: const EdgeInsets.only(top: 12),
@@ -887,6 +908,14 @@ class _ListingFormPageState extends State<ListingFormPage> {
               : null,
           icon: const Icon(Icons.send),
           label: const Text('다방에 보내기'),
+        ),
+        const SizedBox(height: 8),
+        FilledButton.icon(
+          onPressed: _violations().isEmpty
+              ? () => _send(ListingPlatform.daangn)
+              : null,
+          icon: const Icon(Icons.send),
+          label: const Text('당근에 보내기'),
         ),
       ],
     ),
@@ -1177,7 +1206,7 @@ class _ListingFormPageState extends State<ListingFormPage> {
         Text('$title (선택, 최대 20장)'),
         const SizedBox(height: 8),
         const Text(
-          '사진 없이도 전송할 수 있습니다. 사진을 선택하면 1~20장을 다방 미러에 자동 첨부합니다. 직방 미러는 사진 첨부를 아직 지원하지 않으며, 장당 최대 30MB입니다.',
+          '사진 없이도 전송할 수 있습니다. 사진을 선택하면 1~20장을 다방·당근 미러에 자동 첨부합니다(당근은 PNG·JPEG·GIF·WebP만). 직방 미러는 사진 첨부를 아직 지원하지 않으며, 장당 최대 30MB입니다.',
         ),
         OutlinedButton.icon(
           onPressed: _pickingPhotos ? null : _pickPhotos,
@@ -1234,7 +1263,8 @@ class RemoteFormPage extends StatefulWidget {
     required this.values,
     required this.platform,
     this.photos = const [],
-    this.onDabangPhotoTransferComplete,
+    this.onPhotoTransferComplete,
+    this.onListingResult,
   });
   final Map<String, dynamic> values;
   final ListingPlatform platform;
@@ -1243,7 +1273,14 @@ class RemoteFormPage extends StatefulWidget {
   /// Test/diagnostic observation point. It fires only after the remote photo
   /// transfer has settled, whether it succeeded or produced a concrete error.
   final void Function(WebViewController controller, String? failure)?
-  onDabangPhotoTransferComplete;
+  onPhotoTransferComplete;
+
+  /// Test/diagnostic observation point for each result the adapter publishes.
+  final void Function(
+    WebViewController controller,
+    Map<String, dynamic> result,
+  )?
+  onListingResult;
   @override
   State<RemoteFormPage> createState() => _RemoteFormPageState();
 }
@@ -1262,6 +1299,7 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
   bool _picksAddress = false;
   String? _photoStatus;
   String? _photoFailure;
+  List<String> _photoNotes = const [];
 
   /// The mirror serves `.../oneroom/index.html` as a 308 to `.../oneroom/`, so
   /// the URL that reaches [onPageFinished] never equals the configured one.
@@ -1322,6 +1360,7 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
             '입력 ${result['applied'] ?? 0}건 · 검증 ${result['verified'] ?? 0}건$picker';
         limitations = [...missing, ...violations, ...unsupported];
       });
+      widget.onListingResult?.call(controller, result);
     } catch (_) {
       setState(() => status = '입력 결과를 해석하지 못했습니다.');
     }
@@ -1340,24 +1379,28 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
     setState(() => status = '${widget.platform.label} 미러에 입력하는 중…');
     final payload = jsonEncode(widget.values);
     final address = '${widget.values['address'] ?? ''}';
-    _picksAddress = address.isEmpty
+    final kakao = widget.platform.usesKakaoPostcode;
+    _picksAddress = !kakao || address.isEmpty
         ? false
         : await _installFramePicker(address);
     try {
       // The bridge has to be in place before the adapter presses anything that
       // can open the address search.
-      await controller.runJavaScript(
-        postcodeBridgeScript(jsonEncode(widget.values['address'] ?? '')),
-      );
-      await controller.runJavaScript(
-        widget.platform == ListingPlatform.zigbang
-            ? zigbangInjectionScript(payload)
-            : dabangInjectionScript(payload),
-      );
-      if (widget.platform == ListingPlatform.dabang &&
-          widget.photos.isNotEmpty) {
+      if (kakao) {
+        await controller.runJavaScript(
+          postcodeBridgeScript(jsonEncode(widget.values['address'] ?? '')),
+        );
+      }
+      await controller.runJavaScript(switch (widget.platform) {
+        ListingPlatform.zigbang => zigbangInjectionScript(payload),
+        ListingPlatform.dabang => dabangInjectionScript(payload),
+        ListingPlatform.daangn => daangnInjectionScript(payload),
+      });
+      final photoTarget = widget.platform.photoTarget;
+      if (photoTarget != null && widget.photos.isNotEmpty) {
         try {
-          await transferDabangPhotos(
+          final skipped = await transferListingPhotos(
+            target: photoTarget,
             photos: widget.photos,
             evaluate: controller.runJavaScriptReturningResult,
             isCancelled: () => !mounted,
@@ -1371,6 +1414,12 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
               }
             },
           );
+          if (mounted && skipped.isNotEmpty) {
+            setState(() {
+              _photoNotes = skipped;
+              _photoStatus ??= '첨부할 수 있는 사진이 없습니다.';
+            });
+          }
         } catch (error) {
           if (mounted) {
             setState(() {
@@ -1379,7 +1428,7 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
             });
           }
         }
-        widget.onDabangPhotoTransferComplete?.call(controller, _photoFailure);
+        widget.onPhotoTransferComplete?.call(controller, _photoFailure);
       }
     } catch (error) {
       if (mounted) setState(() => status = '자동 입력 JavaScript 오류: $error');
@@ -1421,47 +1470,50 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
   }
 
   @override
-  Widget build(BuildContext context) => PopScope<Object?>(
-    canPop: false,
-    onPopInvokedWithResult: _handleBack,
-    child: Scaffold(
-      appBar: AppBar(title: Text('${widget.platform.label} 미러 입력')),
-      body: Column(
-        children: [
-          Container(
-            width: double.infinity,
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            padding: const EdgeInsets.all(12),
-            child: Text([status, ?_photoStatus].join('\n')),
-          ),
-          if (_photoFailure != null)
-            Padding(
+  Widget build(BuildContext context) {
+    final reasons = [...limitations, ..._photoNotes];
+    return PopScope<Object?>(
+      canPop: false,
+      onPopInvokedWithResult: _handleBack,
+      child: Scaffold(
+        appBar: AppBar(title: Text('${widget.platform.label} 미러 입력')),
+        body: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
               padding: const EdgeInsets.all(12),
-              child: Text(
-                _photoFailure!,
-                style: const TextStyle(color: Colors.red),
+              child: Text([status, ?_photoStatus].join('\n')),
+            ),
+            if (_photoFailure != null)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  _photoFailure!,
+                  style: const TextStyle(color: Colors.red),
+                ),
               ),
-            ),
-          if (limitations.isNotEmpty)
-            ExpansionTile(
-              initiallyExpanded: false,
-              title: Text('직접 확인할 항목 ${limitations.length}개'),
-              subtitle: const Text('사유 전체 보기'),
-              children: limitations
-                  .map(
-                    (reason) => ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.info_outline),
-                      title: SelectableText(reason),
-                    ),
-                  )
-                  .toList(),
-            ),
-          Expanded(child: WebViewWidget(controller: controller)),
-        ],
+            if (reasons.isNotEmpty)
+              ExpansionTile(
+                initiallyExpanded: false,
+                title: Text('직접 확인할 항목 ${reasons.length}개'),
+                subtitle: const Text('사유 전체 보기'),
+                children: reasons
+                    .map(
+                      (reason) => ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.info_outline),
+                        title: SelectableText(reason),
+                      ),
+                    )
+                    .toList(),
+              ),
+            Expanded(child: WebViewWidget(controller: controller)),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 String postcodeBridgeScript(String query) =>
@@ -1629,7 +1681,7 @@ String zigbangInjectionScript(String payload) =>
     lh: 'LH 전세임대 여부: 직방 원룸 폼에 입력란이 없습니다.',
     rooms: '방 개수: 직방 원룸 폼은 방 구조로 방 수를 정하며 별도 방 개수 입력란이 없습니다.',
     unknownFeeReason: '확인 불가 법정 사유: 직방 원룸 미러의 관리비 방식에는 확인 불가 분기가 없습니다.',
-    photoCount: '사진: 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다. 통합 폼에서 선택한 사진은 다방 미러에 자동 첨부할 수 있습니다.'
+    photoCount: '사진: 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다. 통합 폼에서 선택한 사진은 다방·당근 미러에 자동 첨부할 수 있습니다.'
   };
   const esc = s => (window.CSS && CSS.escape) ? CSS.escape(String(s)) : String(s).replace(/[^a-zA-Z0-9_-]/g, '\\\\\$&');
   const find = name => document.querySelector('[name="' + esc(name) + '"], #' + esc(name) + ', [data-flr-key="' + esc(name) + '"]');
@@ -2412,6 +2464,633 @@ String dabangInjectionScript(String payload) =>
     output.violations.push('깐깐이 위반: ' + detail);
   }
   // 「임시저장」·「등록 완료」·#submit 은 어떤 경우에도 누르지 않는다. 이 어댑터는 채우기만 한다.
+  publish();
+})();
+''';
+
+String daangnInjectionScript(String payload) =>
+    '''
+(async () => {
+  const data = $payload;
+$_daangnAdapterBody''';
+
+const _daangnAdapterBody = r'''
+  const output = {applied: 0, missing: [], unsupported: [], verified: 0, violations: []};
+  const publish = () => window.ListingResult.postMessage(JSON.stringify(output));
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  // 깐깐이(mirror 의 엄격 층)는 click/input/change 를 삼켰다가 0.3초 뒤에 다시 쏜다.
+  // 그래서 조작 하나하나의 반응을 기다려야 한다.
+  const REACT = 420;
+  const text = el => el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
+  const norm = value => String(value === undefined || value === null ? '' : value).replace(/\s+/g, '');
+  const filled = value => value !== undefined && value !== null && value !== '' &&
+    !(Array.isArray(value) && value.length === 0);
+  const note = message => { if (!output.unsupported.includes(message)) output.unsupported.push(message); };
+  const miss = (key, why) => output.missing.push(key + ': ' + why);
+  const ok = () => { output.applied++; output.verified++; };
+  const waitUntil = async (predicate, timeout = 2600) => {
+    const until = Date.now() + timeout;
+    for (;;) {
+      const value = predicate();
+      if (value) return value;
+      if (Date.now() >= until) return null;
+      await sleep(60);
+    }
+  };
+
+  /* ── 자리 찾기 ──────────────────────────────────────────────
+   * 당근은 SEED 디자인 시스템이다. 줄 이름은 줄 첫 칸의 굵은 글씨(span.t4-bold)이고, 줄은
+   * div.flex.items-start.gap-x3 이다. 미러는 반응할 때마다 묶음을 틀에서 새로 만들어 갈아 끼우므로
+   * 붙잡아 둔 노드는 곧 유령이 된다 — 자리는 늘 함수로 다시 찾는다. */
+  const root = () => document.getElementById('style-root') || document.body;
+  const rowOf = label => {
+    const span = [...root().querySelectorAll('span.t4-bold')].find(s => text(s) === label);
+    return span ? span.closest('div.flex.items-start.gap-x3') : null;
+  };
+  const inRow = (label, selector) => () => {
+    const row = rowOf(label);
+    return row ? row.querySelector(selector) : null;
+  };
+  const labelIn = (scope, word) => scope
+    ? [...scope.querySelectorAll('label')].find(label => norm(text(label)) === norm(word)) || null
+    : null;
+  const at = target => { try { return typeof target === 'function' ? target() : target; } catch (_) { return null; } };
+  const ready = (locate, timeout) => waitUntil(() => {
+    const el = at(locate);
+    return el && !el.disabled ? el : null;
+  }, timeout);
+  // SEED 는 켜진 체크박스·라디오의 라벨에 data-checked 를 붙인다.
+  const isOn = label => !!label && label.hasAttribute('data-checked');
+
+  /* ── 조작 ───────────────────────────────────────────────────
+   * 깐깐이는 ① el.value = v 로 넣은 값을 「폼이 모르는 대입」으로 되돌리고
+   * ② 앞에 pointerdown 이 없는 로봇 click 을 버린다. 둘 다 피해서 넣는다. */
+  const valueSetter = el => Object.getOwnPropertyDescriptor(
+    el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
+    'value').set;
+  const setNative = (el, value) => {
+    if (!el) return false;
+    el.focus && el.focus();
+    valueSetter(el).call(el, String(value));
+    ['input', 'change'].forEach(type => el.dispatchEvent(new Event(type, {bubbles: true})));
+    el.blur && el.blur();
+    return true;
+  };
+  const press = el => {
+    if (!el) return false;
+    const init = {bubbles: true, cancelable: true, composed: true, view: window};
+    el.dispatchEvent(new PointerEvent('pointerdown', init));
+    el.dispatchEvent(new MouseEvent('mousedown', init));
+    el.dispatchEvent(new MouseEvent('mouseup', init));
+    el.dispatchEvent(new MouseEvent('click', init));
+    return true;
+  };
+
+  const fill = (key, locate, value, transform = v => v) => {
+    if (!filled(value)) return false;
+    const el = at(locate);
+    if (!el) { miss(key, '당근 폼에서 입력란을 찾지 못했습니다.'); return false; }
+    if (el.disabled) { miss(key, '입력란이 잠겨 있어 값을 넣지 못했습니다.'); return false; }
+    const wanted = String(transform(value));
+    setNative(el, wanted);
+    const again = at(locate) || el;
+    if (String(again.value) === wanted) { ok(); return true; }
+    output.applied++;
+    miss(key, '값을 넣었지만 폼에서 같은 값을 다시 읽지 못했습니다.');
+    return false;
+  };
+
+  // 체크박스·라디오는 라벨 안의 숨은 input 을 누른다. 확인은 input.checked 가 아니라 라벨의
+  // data-checked 로 한다 — 대출·반려동물·주차 라디오는 셋 다 name=requiredOptions 라서
+  // 브라우저 눈에는 한 묶음이고, input.checked 는 셋 중 하나만 참이 된다.
+  const setToggle = async (key, locateLabel, wanted, what) => {
+    const label = await waitUntil(() => {
+      const found = at(locateLabel);
+      const input = found && found.querySelector('input');
+      return input && !input.disabled ? found : null;
+    }, 1500);
+    if (!label) {
+      miss(key, at(locateLabel) ? '「' + what + '」이(가) 잠겨 있어 고르지 못했습니다.'
+        : '당근 폼에서 「' + what + '」을(를) 찾지 못했습니다.');
+      return false;
+    }
+    if (isOn(label) === wanted) { ok(); return true; }
+    press(label.querySelector('input'));
+    if (await waitUntil(() => { const now = at(locateLabel); return now && isOn(now) === wanted; }, 2000)) {
+      ok(); await sleep(150); return true;
+    }
+    output.applied++;
+    miss(key, '「' + what + '」을(를) 눌렀지만 선택 상태가 바뀌지 않았습니다.');
+    return false;
+  };
+  const checkbox = (key, rowLabel, word, wanted = true) =>
+    setToggle(key, () => labelIn(rowOf(rowLabel), word), wanted, word);
+  const radio = (key, rowLabel, value, what) => setToggle(key, () => {
+    const row = rowOf(rowLabel);
+    const input = row && row.querySelector('input[type="radio"][value="' + value + '"]');
+    return input ? input.closest('label') : null;
+  }, true, what || value);
+
+  // 선택 상자(매물 종류·건축물 용도·방향)는 button[name] 과, 누르면 바로 아래 붙는 목록이다.
+  // native select 가 없어 표시된 값(.seed-input-button__value)으로 확인한다.
+  const selectButton = name => document.querySelector('button[name="' + name + '"]');
+  const shownValue = name => {
+    const button = selectButton(name);
+    const value = button && button.parentElement.querySelector('.seed-input-button__value');
+    return value ? text(value) : '';
+  };
+  const choose = async (key, name, word) => {
+    if (!filled(word)) return false;
+    if (!selectButton(name)) { miss(key, '당근 폼에서 선택 상자를 찾지 못했습니다.'); return false; }
+    if (norm(shownValue(name)) === norm(word)) { ok(); return true; }
+    const options = () => {
+      const holder = selectButton(name) && selectButton(name).closest('.relative');
+      return holder ? [...holder.querySelectorAll('div.absolute button')] : [];
+    };
+    press(selectButton(name));
+    const list = await waitUntil(() => options().length ? options() : null, 2000);
+    if (!list) { miss(key, '선택 목록이 열리지 않았습니다.'); return false; }
+    const option = list.find(item => norm(text(item)) === norm(word));
+    if (!option) {
+      press(selectButton(name));
+      await sleep(REACT);
+      note(key + ' ' + word + ': 당근 선택 목록에 대응하는 항목이 없습니다.');
+      return false;
+    }
+    const label = text(option);
+    press(option);
+    if (await waitUntil(() => shownValue(name) === label && !options().length, 2000)) {
+      ok(); await sleep(150); return true;
+    }
+    output.applied++;
+    miss(key, '고른 뒤 선택 상자에서 같은 값을 다시 읽지 못했습니다.');
+    return false;
+  };
+
+  /* ── 주소 ───────────────────────────────────────────────────
+   * 당근 미러의 주소 검색은 카카오가 아니라 같은 출처의 /api/juso 다. 주소 칸 → 「매물 주소」 창 →
+   * 치는 동안 검색(0.5초 뒤) → 결과 줄(우편번호 · 도로명 · 지번 · 「선택」) → 상세 주소 → 「입력하기」.
+   * 「입력하기」 뒤에는 건축물대장이 용도·엘리베이터·사용승인일·최고층을 공공데이터로 덮어쓰고
+   * 집주인 전화번호 칸이 켜진다. 그래서 주소를 가장 먼저 넣고, 나머지 값은 그 뒤에 넣는다. */
+  const SIDO = [
+    ['서울특별시', '서울'], ['부산광역시', '부산'], ['대구광역시', '대구'], ['인천광역시', '인천'],
+    ['광주광역시', '광주'], ['대전광역시', '대전'], ['울산광역시', '울산'], ['세종특별자치시', '세종'],
+    ['경기도', '경기'], ['강원특별자치도', '강원'], ['강원도', '강원'], ['충청북도', '충북'],
+    ['충청남도', '충남'], ['전북특별자치도', '전북'], ['전라북도', '전북'], ['전라남도', '전남'],
+    ['경상북도', '경북'], ['경상남도', '경남'], ['제주특별자치도', '제주'], ['제주도', '제주'],
+  ];
+  const simplify = value => {
+    let words = norm(value);
+    for (const [full, short] of SIDO) {
+      if (words.startsWith(full)) { words = short + words.slice(full.length); break; }
+      if (words.startsWith(short)) break;
+    }
+    return words.replace(/\(.*?\)/g, '');
+  };
+  const wantedAddress = simplify(data.address);
+  const numbersOf = words => (words.match(/\d+(-\d+)?/g) || []);
+  const wantedNumbers = numbersOf(wantedAddress);
+  const score = candidate => {
+    const value = simplify(candidate);
+    if (!value) return -1;
+    if (value === wantedAddress) return 1000;
+    let prefix = 0;
+    while (prefix < value.length && prefix < wantedAddress.length && value[prefix] === wantedAddress[prefix]) prefix++;
+    let points = prefix * 4;
+    const values = numbersOf(value);
+    for (const number of wantedNumbers) {
+      if (values.includes(number)) points += 60;
+      else if (values.some(other => other.split('-')[0] === number.split('-')[0])) points += 20;
+    }
+    points -= Math.max(0, values.length - wantedNumbers.length) * 15;
+    if (value.includes(wantedAddress) || wantedAddress.includes(value)) points += 40;
+    return points;
+  };
+
+  const dialog = () => document.querySelector('[role="dialog"][aria-modal="true"]');
+  const dialogInput = () => { const box = dialog(); return box ? box.querySelector('.seed-field__root input') : null; };
+  const dialogButton = word => {
+    const box = dialog();
+    return box ? [...box.querySelectorAll('button')].find(button => text(button) === word) || null : null;
+  };
+  const closeDialog = async () => {
+    const close = dialog() && dialog().querySelector('button[aria-label="닫기"]');
+    if (close) { press(close); await waitUntil(() => !dialog(), 2000); }
+  };
+  // 당근은 동 입력란이 없다 — 「101동 202호」처럼 합쳐 상세 주소에 넣는다. 단일동이면 호수만.
+  const detailAddress = () => {
+    const suffix = (value, tail) => { const words = String(value).trim(); return words.endsWith(tail) ? words : words + tail; };
+    const dong = data.singleBuilding !== true && filled(data.building) ? suffix(data.building, '동') : '';
+    const ho = filled(data.unit) ? suffix(data.unit, '호') : '';
+    return [dong, ho].filter(Boolean).join(' ');
+  };
+  let addressEntered = false;
+  let ledgerFilled = false;
+  const enterAddress = async () => {
+    const opener = selectButton('address');
+    if (!opener) {
+      miss('address', '주소 칸을 찾지 못했습니다. 이미 입력된 주소가 있으면 「수정하기」로 직접 바꿔 주세요.');
+      return;
+    }
+    press(opener);
+    const search = await waitUntil(dialogInput, 3000);
+    if (!search) { miss('address', '「매물 주소」 창이 열리지 않았습니다.'); return; }
+    setNative(search, data.address);
+    const picks = await waitUntil(() => {
+      const box = dialog();
+      if (!box) return null;
+      // 중계에 못 가면 미러는 예시 주소를 보여 준다 — 그것은 고르지 않는다.
+      const notice = box.querySelector('[data-mirror-note]');
+      if (notice) return {failure: text(notice)};
+      const buttons = [...box.querySelectorAll('button')].filter(button => text(button) === '선택');
+      if (buttons.length) return {buttons};
+      return /검색 결과가 없어요/.test(text(box)) ? {failure: '「' + data.address + '」 검색 결과가 없습니다.'} : null;
+    }, 10000);
+    if (!picks || picks.failure) {
+      miss('address', (picks ? picks.failure : '당근 주소 검색 결과가 10초 안에 오지 않았습니다.') + ' 주소를 직접 검색해 주세요.');
+      await closeDialog();
+      return;
+    }
+    // 결과 줄마다 도로명·지번 두 주소 중 더 잘 맞는 쪽으로 점수를 매긴다. 같으면 먼저 나온 줄.
+    let best = null;
+    for (const button of picks.buttons) {
+      const lines = [...button.parentElement.querySelectorAll('.t4-regular')].map(text);
+      const points = Math.max(-1, ...lines.map(score));
+      if (!best || points > best.points) best = {button, points, road: lines[0] || ''};
+    }
+    press(best.button);
+    const detail = await waitUntil(() => dialogButton('입력하기') && dialogInput(), 4000);
+    if (!detail) { miss('address', '주소를 고른 뒤 상세 주소 단계가 열리지 않았습니다.'); await closeDialog(); return; }
+    const words = detailAddress();
+    if (words) {
+      setNative(detail, words);
+      if (!(await waitUntil(() => dialogInput() && dialogInput().value === words, 1000))) {
+        miss('building', '상세 주소를 넣었지만 다시 읽지 못했습니다.');
+      }
+      await sleep(REACT);
+    }
+    const entered = Date.now();
+    press(dialogButton('입력하기'));
+    const shown = await waitUntil(() => {
+      const row = rowOf('주소');
+      return row && !row.querySelector('button[name="address"]') && /수정하기/.test(text(row)) ? row : null;
+    }, 4000);
+    if (!shown) { miss('address', '「입력하기」를 눌렀지만 주소 칸이 바뀌지 않았습니다.'); return; }
+    addressEntered = true;
+    ok();
+    if (words) { output.applied++; output.verified++; }
+    note('매물 기본 주소: 당근 주소 검색에서 「' + best.road + '」를 골랐고 상세 주소는 「' + (words || '없음') + '」로 넣었습니다.');
+    await waitUntil(() => !dialog(), 3000);
+    // 건축물대장은 누른 뒤 0.64~0.94초(+조회 시간)에 채워지고 알림을 띄운다. 없으면 아무것도 안 채운다.
+    ledgerFilled = !!(await waitUntil(() => document.querySelector('[data-mirror-note="ledger"]'),
+      Math.max(0, 4000 - (Date.now() - entered))));
+    if (ledgerFilled) await sleep(REACT);
+  };
+
+  /* ── 변환표 ─────────────────────────────────────────────── */
+  const SALES_TYPE = {
+    '오픈형 원룸': '오픈형 원룸', '분리형 원룸': '분리형 원룸', '복층형 원룸': '오픈형 원룸',
+    '투룸 빌라': '빌라(투룸 이상)', '쓰리룸 이상 빌라': '빌라(투룸 이상)',
+    '오피스텔 원룸형': '오피스텔', '오피스텔 분리/투룸형': '오피스텔', '아파트': '아파트',
+    '단독주택': '단독/전원주택', '다가구주택': '단독/전원주택', '상가주택': '단독/전원주택',
+    '상가 점포': '상가', '사무실': '사무실', '일반 건물': '건물', '공장/창고': '공장/창고', '토지': '토지',
+  };
+  // 띄어쓰기만 다른 것은 norm 으로 맞는다. 이름이 다른 둘만 적는다.
+  const USAGE_ALIAS = {'교정 및 군사시설': '교정시설', '장례시설': '장례식장'};
+  const usageWord = USAGE_ALIAS[data.buildingUse] || data.buildingUse;
+  const TRISTATE = {'가능': 'YES', '불가능': 'NO', '확인 필요': 'DONT_KNOW'};
+  const APPLIANCES = {
+    '에어컨': '에어컨', '세탁기': '세탁기', '냉장고': '냉장고', '전자레인지': '전자렌지',
+    '가스레인지': '가스렌지', '인덕션': '인덕션', '침대': '침대',
+  };
+  const PERIOD = {
+    '직전월 관리비 기준': 'LAST_MONTH', '3개월 평균 관리비': 'AVG_3_MONTHS',
+    '1년 평균 관리비': 'AVG_1_YEAR', '기타 직접 입력': 'ETC',
+  };
+  const INCLUDES = {
+    '청소비': '공용', '승강기유지비': '공용', '주차비': '공용', '경비비': '공용',
+    '전기료': '전기료', '수도료': '수도료', '가스사용료': '가스비', '난방비': '난방비',
+    '인터넷': '인터넷비', '유선TV': 'TV', '기타': '기타',
+  };
+  // 정액 관리비(10만원 이상)의 항목별 줄 이름
+  const ITEM_ROWS = {
+    '전기료': '전기료', '수도료': '수도료', '가스사용료': '가스비', '난방비': '난방비',
+    '인터넷': '인터넷비', '유선TV': 'TV', '기타': '기타',
+  };
+  const ETC_BASIS = {
+    '관리규약에 따라 부과': 'BY_REGULATIONS',
+    '면적 및 세대별 부과': 'COMMON_BY_AREA_OR_UNITS_AND_USAGE_BY_METER',
+    '전체 세대 균등 부과': 'SHARED_BY_UNITS',
+    '계량기별 실비 부과': 'BY_INDIVIDUAL_METER',
+    '의뢰인 미고지': 'ESTIMATED_BY_AGENT_DUE_TO_NO_OWNER_INFO',
+    '기타': 'ETC',
+  };
+  const UNAVAILABLE_REASON = {
+    '단독주택 사유': 'SINGLE_HOUSE', '상가 및 상가주택 사유': 'STORE_NOT_OFFICETEL', '미등기 건물 사유': 'UNREGISTERED_OR_NEW',
+  };
+  const UNDER_10 = '10만원 미만 혹은 의뢰인이 세부 내역 미제공';
+
+  /* ── 관리비 ─────────────────────────────────────────────────
+   * 부과 방식(정액 관리비 · 기타 부과 · 확인 불가)을 고를 때마다 아래 묶음이 통째로 바뀐다.
+   * 정액 관리비 = 부과 기준 + 항목별(공용·전기료…기타) · 「10만원 미만」 = 부과 기준 + 총 관리비 + 관리비에 포함
+   * 기타 부과 = 그것 + 관리비 세부 타입 · 확인 불가 = 확인 불가 사유 */
+  const feeMode = async (key, value, what, shows) => {
+    if (!(await radio(key, '부과 방식', value, what))) return false;
+    if (await waitUntil(() => rowOf(shows), 2500)) return true;
+    miss(key, '「' + what + '」을(를) 골랐지만 아래 칸(' + shows + ')이 나타나지 않았습니다.');
+    return false;
+  };
+  const feePeriod = async () => {
+    const value = PERIOD[data.manageBasis];
+    if (!value) {
+      note('관리비 부과 기준: 통합 폼 값이 없어 당근 「부과 기준」(필수)을 비워 두었습니다. 화면에서 골라 주세요.');
+      return;
+    }
+    await radio('manageBasis', '부과 기준', value, data.manageBasis);
+    if (value === 'ETC') note('관리비 부과 기준 기타: 당근은 기준 내용을 따로 받지만 통합 폼에는 내용이 없어 화면에서 적어 주세요.');
+  };
+  const feeTotal = () => {
+    if (filled(data.managementFee)) fill('managementFee', inRow('총 관리비', 'input[name="totalManageCost"]'), data.managementFee);
+    else note('총 관리비: 통합 폼에 금액이 없어 당근 「총 관리비」(필수)를 비워 두었습니다.');
+  };
+  const feeIncludes = async () => {
+    const seen = new Set();
+    for (const item of (data.manageIncludes || [])) {
+      const target = INCLUDES[item];
+      if (!target) { note('관리비 포함 항목 ' + item + ': 당근 「관리비에 포함」에 대응 항목이 없습니다.'); continue; }
+      if (seen.has(target)) continue;
+      seen.add(target);
+      await checkbox('manageIncludes.' + item, '관리비에 포함', target);
+    }
+    if (seen.has('기타')) note('관리비에 포함 기타: 당근은 기타 항목 이름을 따로 받아 화면에서 적어 주세요.');
+    if (!seen.size) note('관리비에 포함: 통합 폼에 포함 항목이 없어 당근 「관리비에 포함」(필수)을 비워 두었습니다.');
+  };
+  const applyFee = async () => {
+    if (data.noManagementFee === true) {
+      if (await feeMode('noManagementFee', 'FIXED', '정액 관리비', '부과 기준') &&
+          await checkbox('noManagementFee', '부과 방식', UNDER_10) &&
+          await waitUntil(() => rowOf('총 관리비'), 2500)) {
+        fill('noManagementFee', inRow('총 관리비', 'input[name="totalManageCost"]'), '0');
+        note('관리비 없음: 당근에는 「관리비 없음」이 없어 정액 관리비 · 10만원 미만 · 총 관리비 0만원으로 넣었습니다. 「부과 기준」과 「관리비에 포함」(필수)은 화면에서 골라 주세요.');
+      }
+      return;
+    }
+    if (data.manageMethod === '정액 관리비') {
+      if (!(await feeMode('manageMethod', 'FIXED', '정액 관리비', '부과 기준'))) return;
+      const amount = Number(data.managementFee);
+      if (filled(data.managementFee) && !Number.isNaN(amount) && amount < 10) {
+        if (!(await checkbox('managementFee.under10', '부과 방식', UNDER_10))) return;
+        if (!(await waitUntil(() => rowOf('총 관리비'), 2500))) {
+          miss('managementFee', '「10만원 미만」을 켰지만 총 관리비 칸이 나타나지 않았습니다.');
+          return;
+        }
+        await feePeriod();
+        feeTotal();
+        await feeIncludes();
+        return;
+      }
+      // 10만원 이상 — 당근은 공용 금액과 항목별 부과 방식(쓴 만큼·정액)을 받는다.
+      await feePeriod();
+      const details = data.manageDetail || {};
+      for (const [fee, row] of Object.entries(ITEM_ROWS)) {
+        const way = details[fee];
+        const value = way === '정액 부과' ? 'FIXED' : way === '실비 부과' ? 'USED'
+          : way === '해당 없음' && fee === '기타' ? 'NONE' : null;
+        if (value) {
+          await radio('manageDetail.' + fee, row, value, row + ' ' + (value === 'FIXED' ? '정액' : value === 'USED' ? '쓴 만큼' : '없음'));
+          if (fee === '기타' && value !== 'NONE') note('관리비 기타 항목: 당근은 기타 항목 이름을 따로 받아 화면에서 적어 주세요.');
+        } else if (way === '해당 없음') {
+          note('관리비 ' + row + ' 해당 없음: 당근의 이 항목에는 「쓴 만큼」·「정액」만 있어 기본값 「쓴 만큼」을 그대로 두었습니다.');
+        } else {
+          note('관리비 ' + row + ': 통합 폼에 비목별 부과 방식이 없어 당근 기본값을 그대로 두었습니다.');
+        }
+      }
+      note('공용 관리비 금액: 당근 정액 관리비(10만원 이상)는 공용 관리비 금액(필수)을 따로 받지만 통합 폼에는 총액' +
+        (filled(data.managementFee) ? '(' + data.managementFee + '만원)' : '') + '만 있어 비워 두었습니다. 화면에서 직접 넣어 주세요.');
+      const fixed = Object.keys(ITEM_ROWS).filter(fee => details[fee] === '정액 부과').map(fee => ITEM_ROWS[fee]);
+      if (fixed.length) note('정액 항목 금액(' + fixed.join('·') + '): 당근은 「정액」 항목마다 금액을 받지만 통합 폼에는 항목별 금액이 없어 비워 두었습니다.');
+      if (filled(data.manageIncludes)) note('관리비 포함 항목: 당근 정액 관리비(10만원 이상)는 포함 항목 대신 항목별 부과 방식을 받아 체크하지 않았습니다.');
+      return;
+    }
+    if (data.manageMethod === '기타 부과') {
+      if (!(await feeMode('manageMethod', 'ETC', '기타 부과', '관리비 세부 타입(실비 근거)'))) return;
+      await feePeriod();
+      feeTotal();
+      await feeIncludes();
+      const basis = ETC_BASIS[data.otherFeeReason];
+      if (!basis) { note('관리비 세부 타입: 통합 폼에 기타 부과 사유가 없어 당근 「관리비 세부 타입」(필수)을 비워 두었습니다.'); return; }
+      await radio('otherFeeReason', '관리비 세부 타입(실비 근거)', basis, data.otherFeeReason);
+      if (basis === 'ETC') note('관리비 세부 타입 기타: 당근은 직접 입력 내용을 받지만 통합 폼에는 내용이 없어 화면에서 적어 주세요.');
+      return;
+    }
+    if (data.manageMethod === '확인 불가') {
+      if (!(await feeMode('manageMethod', 'UNAVAILABLE', '확인 불가', '확인 불가 사유'))) return;
+      const reason = UNAVAILABLE_REASON[data.unknownFeeReason];
+      if (reason) await radio('unknownFeeReason', '확인 불가 사유', reason, data.unknownFeeReason);
+      else note('확인 불가 사유: 통합 폼 값이 없어 당근 「확인 불가 사유」(필수)를 비워 두었습니다.');
+    }
+  };
+
+  // 건축물대장이 늦게 도착하면 넣은 값을 다시 덮어쓸 수 있다. 끝에서 한 번 더 대조한다.
+  const reconcileLedger = async () => {
+    const counts = {applied: output.applied, verified: output.verified};
+    const fixed = [];
+    if (filled(usageWord) && norm(shownValue('buildingUsage')) !== norm(usageWord)) {
+      await choose('buildingUse', 'buildingUsage', usageWord);
+      fixed.push('건축물 용도');
+    }
+    const date = inRow('사용승인일', 'input[name="buildingApprovalDate"]');
+    if (filled(data.approvalDate) && at(date) && at(date).value !== String(data.approvalDate)) {
+      fill('approvalDate', date, data.approvalDate);
+      fixed.push('사용승인일');
+    }
+    const top = inRow('층 정보', 'input[name="topFloor"]');
+    if (filled(data.floorAll) && at(top) && at(top).value !== String(data.floorAll)) {
+      fill('floorAll', top, data.floorAll);
+      fixed.push('전체 층');
+    }
+    const elevator = labelIn(rowOf('매물 특징'), '엘리베이터');
+    if ((data.elevator === '있음' || data.elevator === '없음') && elevator && isOn(elevator) !== (data.elevator === '있음')) {
+      await checkbox('elevator', '매물 특징', '엘리베이터', data.elevator === '있음');
+      fixed.push('엘리베이터');
+    }
+    Object.assign(output, counts);
+    if (fixed.length) note('건축물대장: 늦게 들어온 공공데이터가 ' + fixed.join('·') + '을(를) 바꿔 통합 폼 값으로 다시 맞췄습니다.');
+  };
+
+  try {
+    // ① 주소 — 건축물대장이 덮어쓰는 칸보다 먼저, 집주인 전화번호 칸보다 먼저.
+    if (filled(data.address)) await enterAddress();
+    if (ledgerFilled) {
+      note('건축물대장: 당근이 주소 입력 뒤 공공데이터로 채운 건축물 용도·사용승인일·전체 층·엘리베이터를 통합 폼 값으로 다시 맞췄습니다.');
+    }
+
+    // ② 매물 종류 — 아파트면 층 정보 줄이 「저/중/고로 표시」가 있는 틀로 바뀐다. 층보다 먼저.
+    const salesType = SALES_TYPE[data.propertyType];
+    if (salesType) await choose('propertyType', 'salesType', salesType);
+    else if (filled(data.propertyType)) note('매물 대분류 ' + data.propertyType + ': 당근 매물 종류에 대응하는 항목이 없습니다.');
+    if (data.propertyType === '복층형 원룸') note('매물 대분류 복층형 원룸: 당근에는 복층 매물 종류가 없어 「오픈형 원룸」과 매물 특징 「복층」으로 넣었습니다.');
+    if (data.propertyType === '다가구주택' || data.propertyType === '상가주택') {
+      note('매물 대분류 ' + data.propertyType + ': 당근은 「단독/전원주택」으로만 받습니다.');
+    }
+
+    // ③ 건축물 용도·면적
+    if (await choose('buildingUse', 'buildingUsage', usageWord) && usageWord !== data.buildingUse) {
+      note('건축물 용도 ' + data.buildingUse + ': 당근 목록의 「' + usageWord + '」로 골랐습니다.');
+    }
+    fill('exclusiveArea', inRow('전용면적', 'input[name="area"]'), data.exclusiveArea);
+    fill('supplyArea', inRow('공급면적', 'input[name="supplyArea"]'), data.supplyArea);
+
+    // ④ 거래 유형 — 고른 유형마다 가격 묶음이 붙고 칸 이름은 trades.<고른 순번>.price 처럼 붙는다.
+    // 단기 매물이면 당근 안내(「거래 유형이 2개 이상이면 모두 선택」)대로 단기도 함께 고른다.
+    const trades = ['월세', '전세', '매매', '단기'].includes(data.trade) ? [data.trade] : [];
+    if (data.shortTerm === true && (data.trade === '월세' || data.trade === '전세')) trades.push('단기');
+    else if (data.shortTerm === true && data.trade === '매매') {
+      note('단기 매물: 당근의 단기는 보증금·월세로 받는 거래라 매매와 함께 고르지 않았습니다.');
+    }
+    for (const kind of trades) await checkbox('trade.' + kind, '거래 유형', kind);
+    const tradeInput = (kind, field) => inRow(kind, '[name$=".' + field + '"]');
+    await waitUntil(() => trades.every(kind => at(tradeInput(kind, 'price'))), 3000);
+    if (data.trade === '월세') {
+      fill('deposit', tradeInput('월세', 'price'), data.deposit);
+      fill('monthlyRent', tradeInput('월세', 'monthlyPay'), data.monthlyRent);
+    } else if (data.trade === '전세') {
+      fill('deposit', tradeInput('전세', 'price'), data.deposit);
+    } else if (data.trade === '매매') {
+      fill('salePrice', tradeInput('매매', 'price'), data.salePrice);
+    } else if (data.trade === '단기') {
+      note('단기 보증금·월세: 통합 폼은 단기 거래에서 금액을 받지 않아 당근 단기 금액 칸(필수)을 비워 두었습니다. 화면에서 직접 넣어 주세요.');
+    }
+    if (trades.includes('단기') && data.trade !== '단기') {
+      fill('shortTerm.deposit', tradeInput('단기', 'price'), data.deposit);
+      if (data.trade === '월세') fill('shortTerm.monthlyRent', tradeInput('단기', 'monthlyPay'), data.monthlyRent);
+      else note('단기 월세: 전세 매물이라 통합 폼에 월세가 없어 당근 단기 월세 칸을 비워 두었습니다.');
+      note('단기 매물: 「' + data.trade + '」와 「단기」를 함께 골랐고 단기 금액에는 ' + data.trade + ' 금액을 그대로 넣었습니다.');
+    }
+    if (trades.includes('단기')) {
+      note('단기 조건: 당근은 단기임대 기간·조건 설명을 받지만 통합 폼에 기간 정보가 없어 비워 두었습니다. 화면에서 직접 적어 주세요.');
+    }
+
+    // ⑤ 매물 정보
+    fill('approvalDate', inRow('사용승인일', 'input[name="buildingApprovalDate"]'), data.approvalDate);
+    const count = value => String(value).replace(/\s*이상$/, '');
+    fill('rooms', inRow('방/욕실', 'input[name="roomCnt"]'), data.rooms, count);
+    fill('bathrooms', inRow('방/욕실', 'input[name="bathroomCnt"]'), data.bathrooms, count);
+    for (const [key, label] of [['rooms', '방 개수'], ['bathrooms', '욕실 수']]) {
+      if (/이상$/.test(String(data[key] || ''))) note(label + ' ' + data[key] + ': 당근은 숫자만 받아 ' + count(data[key]) + '(으)로 넣었습니다.');
+    }
+
+    // 층 — 지하·반지하는 체크, 옥탑은 매물 특징으로 받는다.
+    fill('floorAll', inRow('층 정보', 'input[name="topFloor"]'), data.floorAll);
+    const floorWord = String(data.floor === undefined || data.floor === null ? '' : data.floor);
+    const basement = /^지하\s*(\d+)\s*층?$/.exec(floorWord);
+    if (floorWord === '반지하') await checkbox('floor', '층 정보', '반지하');
+    else if (basement) {
+      await checkbox('floor.basement', '층 정보', '지하');
+      fill('floor', inRow('층 정보', 'input[name="floor"]'), basement[1]);
+    } else if (floorWord === '옥탑') {
+      note('해당 층 옥탑: 당근은 옥탑을 층수가 아니라 매물 특징 「옥탑」으로 받아 해당 층 칸은 비워 두었습니다.');
+    } else fill('floor', inRow('층 정보', 'input[name="floor"]'), floorWord);
+    if (data.floorPrivate === true) {
+      const top = Number(data.floorAll), level = Number(floorWord);
+      if (salesType !== '아파트') {
+        note('층수 비공개: 당근은 매물 종류가 아파트일 때만 「저/중/고로 표시」를 제공합니다.');
+      } else if (!(level > 0 && top > 0)) {
+        note('층수 비공개: 지하·반지하·옥탑은 당근에서 저/중/고로 표시할 수 없습니다.');
+      } else if (await checkbox('floorPrivate', '층 정보', '저/중/고로 표시')) {
+        const band = level / top <= 1 / 3 ? '저층' : level / top <= 2 / 3 ? '중층' : '고층';
+        const chip = () => {
+          const row = rowOf('층 정보');
+          return row ? [...row.querySelectorAll('label.seed-control-chip')].find(label => text(label) === band) : null;
+        };
+        if (await waitUntil(chip, 2000) && await setToggle('floorPrivate.band', chip, true, band)) {
+          note('층수 비공개: 전체 ' + top + '층 중 ' + level + '층이라 「' + band + '」으로 표시했습니다.');
+        }
+      }
+    }
+
+    await choose('direction', 'buildingOrientation', data.direction);
+    if (filled(data.directionBase)) note('방향 기준 ' + data.directionBase + ': 당근은 방향 기준을 따로 받지 않아 방향만 넣었습니다.');
+
+    // 대출·반려동물·주차 — 셋 다 name=requiredOptions. 줄 안에서 value 로 찾는다.
+    if (TRISTATE[data.loanAvailable]) await radio('loanAvailable', '대출', TRISTATE[data.loanAvailable], '대출 ' + data.loanAvailable);
+    if (TRISTATE[data.petAllowed]) await radio('petAllowed', '반려동물', TRISTATE[data.petAllowed], '반려동물 ' + data.petAllowed);
+    if (data.parking === '주차 가능' || data.parking === '주차 불가능') {
+      const yes = data.parking === '주차 가능';
+      if (await radio('parking', '주차', yes ? 'YES' : 'NO', data.parking) && yes) {
+        // 「가능」이면 총·세대당 대수 묶음이 주차 줄 바로 뒤에 붙는다.
+        const total = () => root().querySelector('input[name="availableTotalParkingSpots"]');
+        if (await waitUntil(total, 2000)) {
+          fill('parkingCount', total, data.parkingCount);
+          fill('parkingPerHousehold', () => root().querySelector('input[name="availableParkingSpotsV2"]'), data.parkingPerHousehold);
+        } else miss('parkingCount', '「주차 가능」 뒤에 주차 대수 칸이 나타나지 않았습니다.');
+      }
+    }
+
+    // ⑥ 위반건축물·매물 특징·가전
+    if (data.violation === '위반건축물 해당') await checkbox('violation', '위반건축물', '해당');
+    if (data.propertyType === '복층형 원룸' || data.roomLayout === '복층형 원룸') await checkbox('roomLayout.duplex', '매물 특징', '복층');
+    if (floorWord === '옥탑') await checkbox('floor.rooftop', '매물 특징', '옥탑');
+    // 엘리베이터는 건축물대장이 켤 수 있어 「없음」도 분명히 맞춘다.
+    if (data.elevator === '있음' || data.elevator === '없음') {
+      await checkbox('elevator', '매물 특징', '엘리베이터', data.elevator === '있음');
+    }
+    for (const item of (data.appliances || [])) {
+      if (APPLIANCES[item]) await checkbox('appliances.' + item, '가전/가구', APPLIANCES[item]);
+      else note('가전·가구 옵션 ' + item + ': 당근 가전/가구에 대응 항목이 없습니다.');
+    }
+    for (const item of (data.facilities || [])) {
+      note('보안 및 시설 옵션 ' + item + ': 당근 매물 특징에는 복층·옥탑·엘리베이터만 있어 대응 항목이 없습니다.');
+    }
+
+    // ⑦ 관리비
+    await applyFee();
+
+    // ⑧ 입주가능일 — 날짜가 들어가야 「입주일 협의 가능」이 붙는다.
+    if (data.moveInType === '즉시 입주') {
+      await checkbox('moveInType', '입주가능일', '즉시 입주 가능');
+      if (data.moveInNegotiable === true) note('입주일 협의 가능: 당근은 「즉시 입주 가능」을 켜면 협의 체크를 받지 않습니다.');
+    } else if (data.moveInType === '날짜 지정') {
+      if (fill('moveInDate', inRow('입주가능일', 'input[name="moveInDate"]'), data.moveInDate) && data.moveInNegotiable === true) {
+        if (await waitUntil(() => labelIn(rowOf('입주가능일'), '입주일 협의 가능'), 2000)) {
+          await checkbox('moveInNegotiable', '입주가능일', '입주일 협의 가능');
+        } else miss('moveInNegotiable', '날짜를 넣었지만 「입주일 협의 가능」이 나타나지 않았습니다.');
+      }
+    } else if (data.moveInType === '협의 가능') {
+      note('입주 방식 협의 가능: 당근은 날짜를 넣은 뒤에만 「입주일 협의 가능」을 켤 수 있어 입주가능일(필수)을 비워 두었습니다. 화면에서 날짜를 정하거나 「즉시 입주 가능」을 골라 주세요.');
+    }
+
+    // ⑨ 글 — 제목은 「매물 한줄 설명」(40자)으로 보낸다.
+    fill('description', inRow('상세 설명', 'textarea[name="content"]'), data.description);
+    fill('title', inRow('매물 한줄 설명', 'input[name="addressInfo"]'), data.title);
+    if (filled(data.privateMemo)) {
+      const memo = String(data.privateMemo);
+      if (memo.length > 800) note('중개소 비밀메모: 당근은 800자까지 받아 앞 800자만 넣었습니다.');
+      fill('privateMemo', inRow('중개소 비밀메모', 'textarea[name="memoContent"]'), memo.slice(0, 800));
+    }
+    if (filled(data.ownerPhone)) {
+      const phone = inRow('집주인 전화번호', 'input[name="lessorPhoneNumber"]');
+      if (await ready(phone, 1500)) fill('ownerPhone', phone, data.ownerPhone);
+      else miss('ownerPhone', '당근은 주소를 입력한 뒤에만 집주인 전화번호 칸을 켭니다. 주소를 고른 뒤 직접 넣어 주세요.');
+    }
+
+    if (filled(data.heating)) note('난방 방식: 당근 등록 폼에 입력란이 없습니다.');
+    if (filled(data.lh)) note('LH 전세임대 여부: 당근 등록 폼에 입력란이 없습니다.');
+    if (filled(data.loan)) {
+      note('융자금 ' + data.loan + (filled(data.loanAmount) ? ' (' + data.loanAmount + '만원)' : '') +
+        ': 당근 등록 폼에는 융자금 입력란이 없습니다. 「대출」 줄은 대출 가능 여부입니다.');
+    }
+
+    if (addressEntered) await reconcileLedger();
+  } catch (error) {
+    output.violations.push('당근 자동 입력 오류: ' + String(error && error.stack ? error.stack : error));
+  }
+  for (const violation of (window.__FLR_VIOLATIONS__ || [])) {
+    const detail = typeof violation === 'string' ? violation
+      : [violation.kind, violation.target, violation.detail].filter(Boolean).join(' · ');
+    output.violations.push('깐깐이 위반: ' + detail);
+  }
+  // 「임시저장」·「매물 등록하기」는 어떤 경우에도 누르지 않는다. 이 어댑터는 채우기만 한다.
   publish();
 })();
 ''';

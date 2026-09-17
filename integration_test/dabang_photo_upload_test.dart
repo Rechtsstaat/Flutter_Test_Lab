@@ -34,7 +34,7 @@ void main() {
                     values: values,
                     platform: platform,
                     photos: selectedPhotos,
-                    onDabangPhotoTransferComplete: (controller, failure) {
+                    onPhotoTransferComplete: (controller, failure) {
                       if (!transferFinished.isCompleted) {
                         transferFinished.complete(
                           _TransferResult(controller, failure),

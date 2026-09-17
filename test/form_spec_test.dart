@@ -46,15 +46,27 @@ void main() {
     },
   );
 
-  test('platform configuration exposes separate Zigbang and Dabang forms', () {
-    expect(ListingPlatform.values, hasLength(2));
-    expect(ListingPlatform.zigbang.label, '직방');
-    expect(ListingPlatform.dabang.label, '다방');
-    expect(ListingPlatform.zigbang.formUrl, contains('/zigbang/form/'));
-    expect(ListingPlatform.dabang.formUrl, contains('/dabang/form/room/'));
-  });
+  test(
+    'platform configuration exposes separate Zigbang, Dabang and Daangn forms',
+    () {
+      expect(ListingPlatform.values, hasLength(3));
+      expect(ListingPlatform.zigbang.label, '직방');
+      expect(ListingPlatform.dabang.label, '다방');
+      expect(ListingPlatform.daangn.label, '당근');
+      expect(ListingPlatform.zigbang.formUrl, contains('/zigbang/form/'));
+      expect(ListingPlatform.dabang.formUrl, contains('/dabang/form/room/'));
+      expect(ListingPlatform.daangn.formUrl, contains('/daangn/form/article/'));
+      // 당근은 자기 주소 검색을 쓰고, 사진은 다방·당근만 받는다.
+      expect(ListingPlatform.daangn.usesKakaoPostcode, isFalse);
+      expect(ListingPlatform.zigbang.usesKakaoPostcode, isTrue);
+      expect(ListingPlatform.dabang.usesKakaoPostcode, isTrue);
+      expect(ListingPlatform.zigbang.photoTarget, isNull);
+      expect(ListingPlatform.dabang.photoTarget, PhotoTarget.dabang);
+      expect(ListingPlatform.daangn.photoTarget, PhotoTarget.daangn);
+    },
+  );
 
-  testWidgets('both platform CTAs share validation enablement', (tester) async {
+  testWidgets('all platform CTAs share validation enablement', (tester) async {
     Map<String, dynamic>? receivedValues;
     ListingPlatform? receivedPlatform;
     List<Object>? receivedPhotos;
@@ -71,26 +83,29 @@ void main() {
       ),
     );
     await tester.scrollUntilVisible(
-      find.text('직방에 보내기'),
+      find.text('당근에 보내기'),
       600,
       scrollable: find.byType(Scrollable).first,
     );
 
-    FilledButton zigbang = tester.widget(
-      find.widgetWithText(FilledButton, '직방에 보내기'),
+    const labels = ['직방에 보내기', '다방에 보내기', '당근에 보내기'];
+    FilledButton button(String label) =>
+        tester.widget(find.widgetWithText(FilledButton, label));
+    for (final label in labels) {
+      expect(button(label).onPressed, isNull, reason: label);
+    }
+
+    // 당근 CTA 는 다방 CTA 바로 아래에 있다.
+    expect(
+      tester.getTopLeft(find.text('당근에 보내기')).dy,
+      greaterThan(tester.getTopLeft(find.text('다방에 보내기')).dy),
     );
-    FilledButton dabang = tester.widget(
-      find.widgetWithText(FilledButton, '다방에 보내기'),
-    );
-    expect(zigbang.onPressed, isNull);
-    expect(dabang.onPressed, isNull);
 
     await tester.tap(find.text('자동 채우기'));
     await tester.pump();
-    zigbang = tester.widget(find.widgetWithText(FilledButton, '직방에 보내기'));
-    dabang = tester.widget(find.widgetWithText(FilledButton, '다방에 보내기'));
-    expect(zigbang.onPressed, isNotNull);
-    expect(dabang.onPressed, isNotNull);
+    for (final label in labels) {
+      expect(button(label).onPressed, isNotNull, reason: label);
+    }
 
     await tester.tap(find.widgetWithText(FilledButton, '다방에 보내기'));
     await tester.pumpAndSettle();
@@ -98,12 +113,21 @@ void main() {
     expect(receivedPlatform, ListingPlatform.dabang);
     expect(receivedPhotos, isEmpty);
     expect(receivedValues, isNot(contains('photoCount')));
+
+    Navigator.of(tester.element(find.text('전송 대상 폼'))).pop();
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '당근에 보내기'));
+    await tester.pumpAndSettle();
+    expect(find.text('전송 대상 폼'), findsOneWidget);
+    expect(receivedPlatform, ListingPlatform.daangn);
+    expect(receivedValues, containsPair('address', isNotEmpty));
   });
 
   test('adapters report their result and never activate submit', () {
     for (final script in [
       zigbangInjectionScript('{}'),
       dabangInjectionScript('{}'),
+      daangnInjectionScript('{}'),
     ]) {
       expect(script, contains('window.ListingResult.postMessage'));
       expect(script, contains('missing: []'));
@@ -113,7 +137,57 @@ void main() {
       expect(script, isNot(contains("querySelector('#submit')")));
       expect(script, isNot(contains("'등록 완료'")));
       expect(script, isNot(contains("'임시저장'")));
+      expect(script, isNot(contains("'매물 등록하기'")));
     }
+  });
+
+  test('Daangn adapter follows the SEED form and its shared radio name', () {
+    final script = daangnInjectionScript('{}');
+    // 줄은 굵은 글씨 이름으로 찾고, 반응마다 다시 찾는다.
+    expect(script, contains("querySelectorAll('span.t4-bold')"));
+    expect(script, contains("closest('div.flex.items-start.gap-x3')"));
+    expect(script, contains('const at = target =>'));
+    // 확인은 input.checked 가 아니라 라벨의 data-checked — 대출·반려동물·주차는 name 이 같다.
+    expect(script, contains("hasAttribute('data-checked')"));
+    expect(
+      script,
+      contains("'input[type=\"radio\"][value=\"' + value + '\"]'"),
+    );
+    expect(script, contains("radio('loanAvailable', '대출'"));
+    expect(script, contains("radio('petAllowed', '반려동물'"));
+    expect(script, contains("radio('parking', '주차'"));
+    // 깐깐이를 통과하는 입력·클릭 방식
+    expect(script, contains('valueSetter(el).call(el, String(value))'));
+    expect(script, contains("new PointerEvent('pointerdown', init)"));
+    // 선택 상자는 표시된 값으로 확인한다.
+    expect(script, contains('.seed-input-button__value'));
+    for (final name in ['salesType', 'buildingUsage', 'buildingOrientation']) {
+      expect(script, contains("'$name'"));
+    }
+  });
+
+  test('Daangn adapter enters the address first and keeps the form values', () {
+    final script = daangnInjectionScript('{}');
+    // 카카오가 아니라 미러 안의 주소 창 — 고르고, 상세 주소를 넣고, 「입력하기」.
+    expect(script, isNot(contains('__flrPostcode')));
+    expect(script, contains("selectButton('address')"));
+    expect(script, contains("dialogButton('입력하기')"));
+    expect(script, contains("suffix(data.building, '동')"));
+    expect(script, contains("suffix(data.unit, '호')"));
+    // 예시 주소(중계 실패)는 고르지 않는다.
+    expect(script, contains("querySelector('[data-mirror-note]')"));
+    // 주소가 다른 칸보다 먼저, 그리고 건축물대장이 덮어쓴 값은 끝에서 다시 맞춘다.
+    expect(
+      script.indexOf('await enterAddress()'),
+      lessThan(script.indexOf("await choose('propertyType'")),
+    );
+    expect(script, contains('[data-mirror-note="ledger"]'));
+    expect(script, contains('if (addressEntered) await reconcileLedger();'));
+    // 단기 매물은 단기도 함께 고르고 금액을 복사한다.
+    expect(script, contains("trades.push('단기')"));
+    expect(script, contains("fill('shortTerm.deposit'"));
+    // 관리비 10만원 미만은 체크 하나로 묶음이 바뀐다.
+    expect(script, contains('10만원 미만 혹은 의뢰인이 세부 내역 미제공'));
   });
 
   test(
@@ -185,8 +259,10 @@ void main() {
       'dabang': dabangInjectionScript('{}'),
       'bridge': postcodeBridgeScript('""'),
       'framePicker': addressPickerFrameScript('""'),
-      'photoBridge': dabangPhotoBridgeScript(),
-      'photoCommand': dabangPhotoCommand('append', ['aGVsbG8=']),
+      'daangn': daangnInjectionScript('{}'),
+      'dabangPhotoBridge': listingPhotoBridgeScript(PhotoTarget.dabang),
+      'daangnPhotoBridge': listingPhotoBridgeScript(PhotoTarget.daangn),
+      'photoCommand': listingPhotoCommand('append', ['aGVsbG8=']),
     };
     scripts.forEach((name, source) {
       final temp = File(

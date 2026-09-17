@@ -52,7 +52,8 @@ void main() {
     var called = false;
     for (final photos in [<XFile>[], List.filled(21, photo)]) {
       await expectLater(
-        transferDabangPhotos(
+        transferListingPhotos(
+          target: PhotoTarget.dabang,
           photos: photos,
           evaluate: (_) async {
             called = true;
@@ -70,7 +71,8 @@ void main() {
     final bridge = _RecordingPhotoBridge(doubleEncoded: false);
     final progress = <int>[];
 
-    await transferDabangPhotos(
+    await transferListingPhotos(
+      target: PhotoTarget.dabang,
       photos: [photo],
       evaluate: bridge.evaluate,
       onProgress: (done, total) {
@@ -92,7 +94,8 @@ void main() {
       final progress = <int>[];
       var cleared = false;
       await expectLater(
-        transferDabangPhotos(
+        transferListingPhotos(
+          target: PhotoTarget.dabang,
           photos: List.filled(5, photo),
           timeout: Duration.zero,
           evaluate: (script) async {
@@ -123,7 +126,8 @@ void main() {
       () async {
         final bridge = _RecordingPhotoBridge(doubleEncoded: doubleEncoded);
         final progress = <int>[];
-        await transferDabangPhotos(
+        await transferListingPhotos(
+          target: PhotoTarget.dabang,
           photos: List.filled(5, photo),
           evaluate: bridge.evaluate,
           onProgress: (done, total) {
@@ -159,7 +163,8 @@ void main() {
       lastModified: DateTime(2026, 9, 16),
     );
     final bridge = _RecordingPhotoBridge(doubleEncoded: true);
-    await transferDabangPhotos(
+    await transferListingPhotos(
+      target: PhotoTarget.dabang,
       photos: List.filled(5, largePhoto),
       evaluate: bridge.evaluate,
       onProgress: (_, _) {},
@@ -177,6 +182,69 @@ void main() {
     expect(bridge.cleared, isTrue);
   });
 
+  test('Daangn skips photo formats its mirror drops and sends the rest', () async {
+    final bmp = File('${temporary.path}/plan.bmp');
+    await bmp.writeAsBytes([66, 77, ...List.filled(40, 0)]);
+    final bridge = _RecordingPhotoBridge(
+      doubleEncoded: false,
+      target: PhotoTarget.daangn,
+    );
+    final progress = <int>[];
+
+    final skipped = await transferListingPhotos(
+      target: PhotoTarget.daangn,
+      photos: [photo, XFile(bmp.path)],
+      evaluate: bridge.evaluate,
+      onProgress: (done, total) {
+        expect(total, 1);
+        progress.add(done);
+      },
+    );
+
+    expect(progress, [0, 1]);
+    expect(bridge.types, ['image/png']);
+    // Only the photo that will really arrive counts toward the 20-photo check.
+    expect(bridge.remaining, [1]);
+    expect(skipped, hasLength(1));
+    expect(skipped.single, allOf(contains('2번 사진'), contains('BMP')));
+
+    // The same BMP is a valid Dabang photo.
+    expect(PhotoTarget.dabang.acceptedTypes, contains('image/bmp'));
+  });
+
+  test('a batch with nothing Daangn takes never touches the WebView', () async {
+    final bmp = File('${temporary.path}/plan.bmp');
+    await bmp.writeAsBytes([66, 77, ...List.filled(40, 0)]);
+    var called = false;
+    final skipped = await transferListingPhotos(
+      target: PhotoTarget.daangn,
+      photos: [XFile(bmp.path)],
+      evaluate: (_) async {
+        called = true;
+        return '{}';
+      },
+      onProgress: (_, _) => fail('No photo should be reported as sent.'),
+    );
+    expect(called, isFalse);
+    expect(skipped, hasLength(1));
+  });
+
+  test('each photo bridge looks only at its own mirror form', () {
+    final dabang = listingPhotoBridgeScript(PhotoTarget.dabang);
+    final daangn = listingPhotoBridgeScript(PhotoTarget.daangn);
+    expect(dabang, contains('"/dabang/form/room/"'));
+    expect(dabang, contains("section#visual_info"));
+    expect(daangn, contains('"/daangn/form/article/"'));
+    expect(daangn, contains("document.getElementById('image-upload')"));
+    // 당근 칸은 올라가는 동안 잠기고, 다 올라가면 sortable 과 data-mirror-key 를 받는다.
+    expect(daangn, contains("classList.contains('cursor-not-allowed')"));
+    expect(daangn, contains("getAttribute('data-mirror-key')"));
+    for (final script in [dabang, daangn]) {
+      expect(script, contains('current.every(settled)'));
+      expect(script, contains("el.dispatchEvent(new Event('change'"));
+    }
+  });
+
   testWidgets(
     'photos are optional and one selected photo can be sent or deleted',
     (tester) async {
@@ -190,7 +258,7 @@ void main() {
         500,
         scrollable: find.byType(Scrollable).first,
       );
-      for (final label in ['직방에 보내기', '다방에 보내기']) {
+      for (final label in ['직방에 보내기', '다방에 보내기', '당근에 보내기']) {
         expect(
           tester
               .widget<FilledButton>(find.widgetWithText(FilledButton, label))
@@ -261,9 +329,14 @@ void main() {
 /// Records the native transport contract. DOM/card behavior is exercised by
 /// the separate real-mirror WebKit verification, rather than simulated here.
 class _RecordingPhotoBridge {
-  _RecordingPhotoBridge({required this.doubleEncoded});
+  _RecordingPhotoBridge({
+    required this.doubleEncoded,
+    this.target = PhotoTarget.dabang,
+  });
 
   final bool doubleEncoded;
+  final PhotoTarget target;
+  final types = <String>[];
   final received = <List<int>>[];
   final chunkLengths = <int>[];
   final remaining = <int>[];
@@ -276,7 +349,7 @@ class _RecordingPhotoBridge {
   int _currentPolls = 0;
 
   Future<Object> evaluate(String script) async {
-    if (script == dabangPhotoBridgeScript()) {
+    if (script == listingPhotoBridgeScript(target)) {
       return _encode({'ready': true, 'count': 0});
     }
     final command = RegExp(r'window\.__flrPhotos\.(\w+)\(\.\.\.(\[.*\])\)')
@@ -295,7 +368,8 @@ class _RecordingPhotoBridge {
           reason: 'The previous file must finish before beginning another.',
         );
         metadata = Map<String, dynamic>.from(args[0] as Map);
-        expect(metadata!['type'], 'image/png');
+        types.add(metadata!['type'] as String);
+        expect(target.acceptedTypes, contains(metadata!['type']));
         expect(metadata!['name'], isNotEmpty);
         remaining.add(args[1] as int);
         staging = [];
