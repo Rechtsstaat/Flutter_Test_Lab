@@ -1,12 +1,11 @@
 import '../fields.dart';
 
-/// 나의 광고 / 성사된 광고 — the two tabs the lo-fi splits the home list into.
+/// 진행 중 (anything still live or in progress) / 종료 (nothing left live).
 enum ListingStatus { advertising, closed }
 
-/// The lo-fi's 개선 note asks for 거래 완료 and 광고 종료 to stop sharing the word
-/// "삭제", and for a listing another agent closed to leave the list on its own.
-/// Keeping the reason on the record is what lets the home banner say which of
-/// the three happened.
+/// Why a listing stopped advertising. The hi-fi's 102 only offers
+/// "광고를 종료할래요", but records written by the lo-fi build may carry the
+/// other two, so they stay readable.
 enum ClosedReason { dealDone, adEnded, takenByOthers }
 
 extension ClosedReasonLabel on ClosedReason {
@@ -17,25 +16,23 @@ extension ClosedReasonLabel on ClosedReason {
   };
 }
 
-/// Per-channel publishing state. The 과정 신뢰 screen renders one row per
-/// channel straight from this.
-enum ChannelState { pending, working, published, failed, removed }
+/// Per-channel state. The Process Hub renders one row per channel straight
+/// from this, and the home card and 광고 상태 card reuse the same reading.
+///
+/// [needsCheck] is 205's "확인이 필요해요": the adapter finished, but the agent
+/// still has to look at the form and press the platform's own 등록 button.
+/// [failed] is 206's "연결이 어려워요": the platform page never came up.
+enum ChannelState { pending, working, needsCheck, published, failed, removed }
 
 extension ChannelStateLabel on ChannelState {
-  String get publishLabel => switch (this) {
-    ChannelState.pending => '대기 중',
-    ChannelState.working => '올리는 중',
-    ChannelState.published => '완료',
-    ChannelState.failed => '확인 필요',
-    ChannelState.removed => '내려감',
-  };
-
-  String get takedownLabel => switch (this) {
-    ChannelState.pending => '대기 중',
-    ChannelState.working => '내리는 중',
-    ChannelState.published => '노출 중',
-    ChannelState.failed => '확인 필요',
-    ChannelState.removed => '삭제 완료',
+  /// The short status a listing card and the 광고 상태 card print.
+  String get statusLabel => switch (this) {
+    ChannelState.pending => '미등록',
+    ChannelState.working => '입력 중',
+    ChannelState.needsCheck => '확인 필요',
+    ChannelState.published => '광고 중',
+    ChannelState.failed => '연결 오류',
+    ChannelState.removed => '광고 종료',
   };
 }
 
@@ -45,6 +42,7 @@ class Listing {
     required this.createdAt,
     required this.values,
     required this.channels,
+    this.channelDates = const {},
     this.photoPaths = const [],
     this.status = ListingStatus.advertising,
     this.closedReason,
@@ -59,6 +57,10 @@ class Listing {
   /// received the first time.
   final Map<String, dynamic> values;
   final Map<ListingPlatform, ChannelState> channels;
+
+  /// When each channel last reached [ChannelState.published] or
+  /// [ChannelState.removed] — the 등록일 / 종료일 the status cards print.
+  final Map<ListingPlatform, DateTime> channelDates;
   final List<String> photoPaths;
   final ListingStatus status;
   final ClosedReason? closedReason;
@@ -72,6 +74,46 @@ class Listing {
   }
 
   String get address => '${values['address'] ?? ''}'.trim();
+
+  /// The address without its 시·도 / 시·군·구 prefix, plus the building name —
+  /// "효자로 62 테라비아타in 지곡".
+  String get placeName {
+    final parts = address.split(RegExp(r'\s+'))..removeWhere((p) => p.isEmpty);
+    while (parts.length > 2 &&
+        RegExp(r'(특별시|광역시|특별자치시|특별자치도|도|시|군|구)$').hasMatch(parts.first)) {
+      parts.removeAt(0);
+    }
+    final building = '${values['buildingName'] ?? ''}'.trim();
+    final place = [...parts, if (building.isNotEmpty) building].join(' ');
+    return place.isEmpty ? title : place;
+  }
+
+  /// A value with its unit, unless it is not a bare number ("반지하", "옥탑")
+  /// or already carries the unit.
+  String _suffixed(String key, String suffix) {
+    final raw = '${values[key] ?? ''}'.trim();
+    if (raw.isEmpty) return '';
+    return RegExp(r'^\d+$').hasMatch(raw) ? '$raw$suffix' : raw;
+  }
+
+  /// 101's card name: place and unit.
+  String get headline =>
+      [placeName, _suffixed('unit', '호')].where((p) => p.isNotEmpty).join(' ');
+
+  /// 102's heading: place, 동 (unless it is a single building) and unit.
+  String get fullName => [
+    placeName,
+    if (values['singleBuilding'] != true) _suffixed('building', '동'),
+    _suffixed('unit', '호'),
+  ].where((p) => p.isNotEmpty).join(' ');
+
+  /// "아파트 · 59m² · 8층"
+  String get factLine => [
+    '${values['propertyType'] ?? ''}'.trim(),
+    if ('${values['exclusiveArea'] ?? ''}'.trim().isNotEmpty)
+      '${values['exclusiveArea']}m²',
+    _suffixed('floor', '층'),
+  ].where((p) => p.isNotEmpty).join(' · ');
 
   /// "월세 1000/65", "전세 1억 8000", "매매 12억" — the one line the card and the
   /// detail sheet both lead with.
@@ -112,6 +154,7 @@ class Listing {
   Listing copyWith({
     Map<String, dynamic>? values,
     Map<ListingPlatform, ChannelState>? channels,
+    Map<ListingPlatform, DateTime>? channelDates,
     List<String>? photoPaths,
     ListingStatus? status,
     ClosedReason? closedReason,
@@ -121,6 +164,7 @@ class Listing {
     createdAt: createdAt,
     values: values ?? this.values,
     channels: channels ?? this.channels,
+    channelDates: channelDates ?? this.channelDates,
     photoPaths: photoPaths ?? this.photoPaths,
     status: status ?? this.status,
     closedReason: closedReason ?? this.closedReason,
@@ -133,6 +177,10 @@ class Listing {
     'values': values,
     'channels': {
       for (final entry in channels.entries) entry.key.name: entry.value.name,
+    },
+    'channelDates': {
+      for (final entry in channelDates.entries)
+        entry.key.name: entry.value.toIso8601String(),
     },
     'photoPaths': photoPaths,
     'status': status.name,
@@ -155,11 +203,21 @@ class Listing {
         if (platform != null && state != null) channels[platform] = state;
       }
     }
+    final rawDates = json['channelDates'];
+    final channelDates = <ListingPlatform, DateTime>{};
+    if (rawDates is Map) {
+      for (final entry in rawDates.entries) {
+        final platform = _byName(ListingPlatform.values, '${entry.key}');
+        final date = DateTime.tryParse('${entry.value}');
+        if (platform != null && date != null) channelDates[platform] = date;
+      }
+    }
     return Listing(
       id: id,
       createdAt: createdAt,
       values: Map<String, dynamic>.from(json['values'] as Map? ?? const {}),
       channels: channels,
+      channelDates: channelDates,
       photoPaths: List<String>.from(json['photoPaths'] as List? ?? const []),
       status:
           _byName(ListingStatus.values, '${json['status']}') ??

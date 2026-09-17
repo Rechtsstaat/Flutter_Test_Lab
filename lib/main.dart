@@ -11,6 +11,7 @@ export 'design/components.dart';
 export 'design/tokens.dart';
 export 'fields.dart';
 export 'models/listing.dart';
+export 'mirror_session.dart';
 export 'remote_form.dart';
 export 'screens/home_page.dart';
 export 'screens/listing_detail_page.dart';
@@ -29,20 +30,32 @@ class ListingApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
+    title: '한방',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       useMaterial3: true,
-      scaffoldBackgroundColor: Brand.canvas,
+      scaffoldBackgroundColor: AppColor.bgPage,
       colorScheme: ColorScheme.fromSeed(
-        seedColor: Brand.blue,
-        primary: Brand.blue,
-        surface: Brand.surface,
+        seedColor: AppColor.actionPrimary,
+        primary: AppColor.actionPrimary,
+        onPrimary: AppColor.actionPrimaryContent,
+        surface: AppColor.bgSurface,
+        onSurface: AppColor.textPrimary,
+        error: AppColor.statusError,
       ),
       splashFactory: InkSparkle.splashFactory,
-      // The lo-fi never shows a Material divider or filled-input outline, so
-      // the defaults are turned off once here instead of per screen.
-      dividerTheme: const DividerThemeData(color: Brand.hairline, space: 1),
-      textSelectionTheme: const TextSelectionThemeData(cursorColor: Brand.blue),
+      dividerTheme: const DividerThemeData(
+        color: AppColor.borderSubtle,
+        space: 1,
+      ),
+      textSelectionTheme: const TextSelectionThemeData(
+        cursorColor: AppColor.actionPrimary,
+        selectionHandleColor: AppColor.actionPrimary,
+      ),
+      snackBarTheme: const SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: AppColor.bgOverlay,
+      ),
     ),
     home: SplashPage(store: store),
   );

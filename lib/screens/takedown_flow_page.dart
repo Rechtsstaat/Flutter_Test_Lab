@@ -1,35 +1,30 @@
 import 'package:flutter/material.dart';
 
-import '../android_layout.dart';
 import '../data/app_store.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
 import '../fields.dart';
+import '../mirror_session.dart';
 import '../models/listing.dart';
 import 'home_page.dart';
+import 'listing_detail_page.dart' show formatDate;
 
-/// 301 광고 종료 (내리기).
+/// 3021 광고 종료-웹뷰 → 303 광고 종료 완료.
 ///
-/// The 확정 note asks this to mirror 201 exactly — 과정 신뢰 while it runs, 결과
-/// 신뢰 when it lands — so the agent sees a channel actually come down instead
-/// of a listing quietly changing state.
-///
-/// The mirror lab only publishes registration forms; there is no takedown
-/// endpoint to drive, so each channel here advances on a timer. Everything the
-/// screen reports about the listing itself (which channels, what state, where
-/// it moved to) is real and persisted.
+/// Each picked platform's listing management page opens in turn inside 한방's
+/// chrome. The agent presses the platform's own 종료 button there; hearing
+/// that press moves on to the next platform. Leaving a page without pressing
+/// keeps that platform live.
 class TakedownFlowPage extends StatefulWidget {
   const TakedownFlowPage({
     super.key,
     required this.store,
     required this.listing,
-    required this.reason,
     required this.channels,
   });
 
   final AppStore store;
   final Listing listing;
-  final ClosedReason reason;
   final List<ListingPlatform> channels;
 
   @override
@@ -37,139 +32,215 @@ class TakedownFlowPage extends StatefulWidget {
 }
 
 class _TakedownFlowPageState extends State<TakedownFlowPage> {
-  late final Map<ListingPlatform, ChannelState> _states = {
-    for (final platform in widget.channels) platform: ChannelState.pending,
-  };
+  final _removed = <ListingPlatform>{};
+  final _skipped = <ListingPlatform>{};
+  final _pages = <ListingPlatform, MirrorPage>{};
 
   int _index = 0;
   bool _done = false;
 
+  /// Set while 303's 바로보기 has a page in front.
+  ListingPlatform? _viewing;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _run());
+    _open(0);
   }
 
-  Future<void> _run() async {
-    for (final (index, platform) in widget.channels.indexed) {
-      if (!mounted) return;
-      setState(() {
-        _index = index;
-        _states[platform] = ChannelState.working;
-      });
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
-      if (!mounted) return;
-      setState(() => _states[platform] = ChannelState.removed);
-      await Future<void>.delayed(const Duration(milliseconds: 400));
+  @override
+  void dispose() {
+    for (final page in _pages.values) {
+      page.dispose();
     }
+    super.dispose();
+  }
+
+  void _open(int index) {
+    final platform = widget.channels[index];
+    _pages[platform] = MirrorPage(
+      platform: platform,
+      url: Uri.parse(platform.listingsUrl),
+      watchLabels: platform.takedownLabels,
+    )..addListener(() => _onPage(platform));
+    _index = index;
+  }
+
+  void _onPage(ListingPlatform platform) {
     if (!mounted) return;
-    await widget.store.close(
-      widget.listing,
-      reason: widget.reason,
-      channels: widget.channels.toSet(),
-    );
+    final page = _pages[platform];
+    if (page?.pressedLabel != null && _removed.add(platform)) {
+      _advance();
+    } else {
+      setState(() {});
+    }
+  }
+
+  Future<void> _advance() async {
+    if (_index + 1 < widget.channels.length) {
+      setState(() => _open(_index + 1));
+      return;
+    }
+    if (_removed.isNotEmpty) {
+      await widget.store.close(
+        widget.listing,
+        reason: ClosedReason.adEnded,
+        channels: _removed,
+      );
+    }
     if (mounted) setState(() => _done = true);
   }
 
-  void _close() => Navigator.of(context).pushAndRemoveUntil(
+  Future<void> _back() async {
+    if (_done) {
+      if (_viewing != null) {
+        setState(() => _viewing = null);
+      } else {
+        _home();
+      }
+      return;
+    }
+    final page = _pages[widget.channels[_index]];
+    if (await page?.closeOverlay() ?? false) return;
+    if (!mounted) return;
+    final skip = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColor.bgSurface,
+        title: Text(
+          '${widget.channels[_index].label} 광고를 그대로 둘까요?',
+          style: AppText.title,
+        ),
+        content: const Text(
+          '종료하기 버튼을 누르지 않으면 이 플랫폼의 광고는 계속 노출돼요.',
+          style: AppText.bodySmall,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('계속 종료하기'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('그대로 두기'),
+          ),
+        ],
+      ),
+    );
+    if (skip == true && mounted) {
+      _skipped.add(widget.channels[_index]);
+      await _advance();
+    }
+  }
+
+  void _home() => Navigator.of(context).pushAndRemoveUntil(
     MaterialPageRoute<void>(builder: (_) => HomePage(store: widget.store)),
     (route) => false,
   );
 
   @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: _done,
-    child: Scaffold(
-      backgroundColor: Brand.canvas,
-      body: SafeArea(
-        child: AnimatedSwitcher(
-          duration: Motion.base,
-          switchInCurve: Motion.enter,
-          child: _done
-              ? _TakedownResult(
-                  key: const ValueKey('result'),
-                  channels: widget.channels,
-                  reason: widget.reason,
-                  onClose: _close,
-                )
-              : _TakedownProgress(
-                  key: const ValueKey('progress'),
-                  channels: widget.channels,
-                  states: _states,
-                  index: _index,
-                ),
-        ),
-      ),
-    ),
-  );
-}
-
-class _TakedownProgress extends StatelessWidget {
-  const _TakedownProgress({
-    super.key,
-    required this.channels,
-    required this.states,
-    required this.index,
-  });
-
-  final List<ListingPlatform> channels;
-  final Map<ListingPlatform, ChannelState> states;
-  final int index;
-
-  @override
   Widget build(BuildContext context) {
-    final current = channels[index.clamp(0, channels.length - 1)];
-    final finished = states.values
-        .where((state) => state == ChannelState.removed)
-        .length;
+    final current = widget.channels[_index];
+    final front = _done ? _viewing : current;
+    // All pages stay mounted; the one in front is painted last.
+    final order = [
+      ..._pages.keys.where((platform) => platform != front),
+      if (front != null && _pages.containsKey(front)) front,
+    ];
+    final frontPage = front == null ? null : _pages[front];
 
-    return SizedBox.expand(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-        child: Column(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _back();
+      },
+      child: Scaffold(
+        backgroundColor: AppColor.bgPage,
+        body: Stack(
+          fit: StackFit.expand,
           children: [
-            const Spacer(flex: 3),
-            PulseHalo(
-              color: current.color,
-              child: PlatformBadge(current, size: 96),
-            ),
-            const SizedBox(height: 28),
-            Text('${current.label}에서 내리는 중이에요', style: Type.title),
-            const SizedBox(height: 12),
-            WorkingDots(color: current.color),
-            const SizedBox(height: 18),
-            const Text(
-              '조금만 기다려주세요.\n앱을 종료하지 말고 기다려주세요!',
-              textAlign: TextAlign.center,
-              style: Type.bodyMuted,
-            ),
-            const SizedBox(height: 26),
-            TweenAnimationBuilder<double>(
-              duration: Motion.slow,
-              curve: Motion.enter,
-              tween: Tween(begin: 0, end: finished / channels.length),
-              builder: (context, value, _) => ClipRRect(
-                borderRadius: BorderRadius.circular(3),
-                child: LinearProgressIndicator(
-                  value: value,
-                  minHeight: 6,
-                  backgroundColor: Brand.hairline,
-                  valueColor: const AlwaysStoppedAnimation(Brand.blue),
-                ),
+            SafeArea(
+              bottom: false,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    height: 60,
+                    child: _done
+                        ? BackTitleBar(
+                            title: _viewing?.label ?? '',
+                            onBack: _back,
+                          )
+                        : StepProgress(
+                            total: widget.channels.length,
+                            current: _index + 1,
+                            label:
+                                '광고 종료 ${_index + 1} / ${widget.channels.length}',
+                            onBack: _back,
+                          ),
+                  ),
+                  Expanded(
+                    child: WebSheet(
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          for (final platform in order)
+                            KeyedSubtree(
+                              key: ObjectKey(_pages[platform]),
+                              child: MirrorWebView(_pages[platform]!),
+                            ),
+                          if (frontPage?.failure != null)
+                            ColoredBox(
+                              color: AppColor.bgSurface,
+                              child: Center(
+                                child: Text(
+                                  frontPage!.failure!,
+                                  style: AppText.bodySmall,
+                                ),
+                              ),
+                            ),
+                          if (!_done)
+                            Positioned(
+                              left: Space.s16,
+                              right: Space.s16,
+                              bottom: Space.s16,
+                              child: SafeArea(
+                                top: false,
+                                child: TimedToast(
+                                  toastKey: current,
+                                  title: '종료하기 버튼을 눌러주세요',
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 10),
-            Text('$finished / ${channels.length}개 채널 완료', style: Type.caption),
-            const Spacer(flex: 3),
-            for (final platform in channels)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: _TakedownRow(
-                  platform: platform,
-                  state: states[platform] ?? ChannelState.pending,
+            if (_done)
+              IgnorePointer(
+                ignoring: _viewing != null,
+                child: AnimatedSlide(
+                  duration: Motion.base,
+                  curve: Motion.enter,
+                  offset: _viewing == null ? Offset.zero : const Offset(0, 1),
+                  child: ColoredBox(
+                    color: AppColor.bgPage,
+                    child: _Result(
+                      listing:
+                          widget.store.byId(widget.listing.id) ??
+                          widget.listing,
+                      removed: _removed,
+                      skipped: _skipped,
+                      channels: widget.channels,
+                      onView: (platform) => setState(() => _viewing = platform),
+                      onHome: _home,
+                    ),
+                  ),
                 ),
               ),
-            SizedBox(height: 20 + androidBottomInset(context).bottom),
           ],
         ),
       ),
@@ -177,116 +248,82 @@ class _TakedownProgress extends StatelessWidget {
   }
 }
 
-class _TakedownRow extends StatelessWidget {
-  const _TakedownRow({required this.platform, required this.state});
+class _Result extends StatelessWidget {
+  const _Result({
+    required this.listing,
+    required this.removed,
+    required this.skipped,
+    required this.channels,
+    required this.onView,
+    required this.onHome,
+  });
 
-  final ListingPlatform platform;
-  final ChannelState state;
+  final Listing listing;
+  final Set<ListingPlatform> removed;
+  final Set<ListingPlatform> skipped;
+  final List<ListingPlatform> channels;
+  final ValueChanged<ListingPlatform> onView;
+  final VoidCallback onHome;
 
   @override
   Widget build(BuildContext context) {
-    final active = state == ChannelState.working;
-    return AnimatedContainer(
-      duration: Motion.base,
-      curve: Motion.enter,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: active ? Brand.blueFaint : Brand.surface,
-        borderRadius: BorderRadius.circular(Insets.radiusField),
-        border: Border.all(
-          color: active ? Brand.blue : Brand.hairline,
-          width: active ? 1.4 : 1,
+    final title = removed.isEmpty
+        ? '광고를 종료하지 않았어요'
+        : '${removed.length}개 플랫폼에서 광고 종료';
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          Space.gutter,
+          60,
+          Space.gutter,
+          Space.s16,
         ),
-      ),
-      child: Row(
-        children: [
-          PlatformBadge(
-            platform,
-            size: 30,
-            dimmed: state != ChannelState.working,
-          ),
-          const SizedBox(width: 12),
-          Text(
-            platform.label,
-            style: Type.body.copyWith(fontWeight: FontWeight.w600),
-          ),
-          const Spacer(),
-          AnimatedSwitcher(
-            duration: Motion.quick,
-            child: Text(
-              state.takedownLabel,
-              key: ValueKey(state),
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: switch (state) {
-                  ChannelState.working => Brand.blue,
-                  ChannelState.removed => Brand.success,
-                  _ => Brand.inkFaint,
-                },
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Spacer(),
+            Text(title, textAlign: TextAlign.center, style: AppText.title),
+            const SizedBox(height: Space.s16),
+            Center(
+              child: OutcomeMark(
+                removed.isEmpty ? OutcomeKind.warning : OutcomeKind.success,
               ),
             ),
-          ),
-        ],
+            if (skipped.isNotEmpty) ...[
+              const SizedBox(height: Space.s16),
+              Text(
+                '${skipped.map((p) => p.label).join('·')} 광고는 계속 노출돼요',
+                textAlign: TextAlign.center,
+                style: AppText.bodySmall,
+              ),
+            ],
+            const Spacer(flex: 2),
+            for (final platform in channels)
+              Padding(
+                padding: const EdgeInsets.only(bottom: Space.s8),
+                child: removed.contains(platform)
+                    ? ChannelRow(
+                        mark: RowMark.done,
+                        name: platform.label,
+                        status: '광고 종료',
+                        action: '바로보기',
+                        actionIcon: Icons.north_east_rounded,
+                        onAction: () => onView(platform),
+                        subline: listing.channelDates[platform] == null
+                            ? null
+                            : '종료일: ${formatDate(listing.channelDates[platform]!)}',
+                      )
+                    : ChannelRow(
+                        mark: RowMark.waiting,
+                        name: platform.label,
+                        status: '광고 유지',
+                      ),
+              ),
+            const SizedBox(height: Space.s24),
+            BrandButton('홈으로', onPressed: onHome),
+          ],
+        ),
       ),
     );
   }
-}
-
-class _TakedownResult extends StatelessWidget {
-  const _TakedownResult({
-    super.key,
-    required this.channels,
-    required this.reason,
-    required this.onClose,
-  });
-
-  final List<ListingPlatform> channels;
-  final ClosedReason reason;
-  final VoidCallback onClose;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: Insets.gutter),
-    child: Column(
-      children: [
-        const Spacer(flex: 3),
-        const Icon(
-          Icons.trending_down_rounded,
-          size: 44,
-          color: Brand.inkMuted,
-        ),
-        const SizedBox(height: 22),
-        FadeSlideIn(
-          child: Text(
-            '광고가 ${channels.map((p) => p.label).join(', ')}에서\n내려갔어요',
-            textAlign: TextAlign.center,
-            style: Type.display,
-          ),
-        ),
-        const SizedBox(height: 10),
-        FadeSlideIn(
-          delay: const Duration(milliseconds: 120),
-          child: Text(
-            reason == ClosedReason.dealDone
-                ? '성사된 광고 목록으로 옮겼어요.'
-                : '성사된 광고 목록에서 다시 볼 수 있어요.',
-            style: Type.caption,
-          ),
-        ),
-        const SizedBox(height: 20),
-        FadeSlideIn(
-          delay: const Duration(milliseconds: 200),
-          child: Wrap(
-            spacing: 8,
-            alignment: WrapAlignment.center,
-            children: [for (final platform in channels) PlatformChip(platform)],
-          ),
-        ),
-        const Spacer(flex: 2),
-        BrandButton('확인', onPressed: onClose),
-        SizedBox(height: 24 + androidBottomInset(context).bottom),
-      ],
-    ),
-  );
 }

@@ -361,37 +361,37 @@ Future<_Run> _sendToDaangn(
     ),
   );
 
-  // One CTA now posts to every selected channel, so narrow the run to the
-  // channel under test while the picker is still on screen.
-  await tester.tap(find.text('직방'));
-  await tester.tap(find.text('다방'));
-  await tester.pump();
-
   await tester.tap(find.text('자동 채우기'));
   await tester.pump();
   final scrollable = find.byType(Scrollable).first;
   if (photos.isNotEmpty) {
     await tester.scrollUntilVisible(
-      find.text('5. 입주 및 매물 상세 설명'),
-      500,
-      scrollable: scrollable,
-    );
-    await tester.tap(find.text('5. 입주 및 매물 상세 설명'));
-    await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(
-      find.text('사진 선택 (0/20장)'),
+      find.byTooltip('사진 추가'),
       400,
       scrollable: scrollable,
     );
-    await tester.ensureVisible(find.text('사진 선택 (0/20장)'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('사진 선택 (0/20장)'));
+    await tester.tap(find.byTooltip('사진 추가'));
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('사진 선택 (${photos.length}/20장)'), findsOneWidget);
+    expect(find.text('${photos.length}/20'), findsOneWidget);
   }
-  await tester.tap(find.text('선택한 1개 채널에 등록하기'));
-  // The publish flow holds a beat on its progress screen before opening the
-  // mirror, and that screen animates forever — pump past it by hand.
+
+  // One CTA posts to every selected platform, so narrow the run to 당근 in
+  // 플랫폼 선택 at the end of the form.
+  await tester.scrollUntilVisible(
+    find.text('플랫폼 선택'),
+    600,
+    scrollable: scrollable,
+  );
+  await tester.ensureVisible(find.text('당근'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('직방'));
+  await tester.tap(find.text('다방'));
+  await tester.pump();
+
+  await tester.tap(find.text('광고 등록'));
+  // The Process Hub animates for as long as the platform is being worked on
+  // — pump past the route change by hand.
   await tester.pump();
   await tester.pump(const Duration(seconds: 1));
   await tester.pump();

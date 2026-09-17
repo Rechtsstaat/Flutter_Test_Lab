@@ -18,6 +18,42 @@ extension ListingPlatformConfig on ListingPlatform {
       'https://mirror-dimension-lab.pages.dev/daangn/form/article/',
   };
 
+  /// The page a signed-in agent lands on (직방 CEO 대시보드, 다방프로 대시보드,
+  /// 당근부동산 중개소 홈). The mirror starts after login, so the 0011 login
+  /// stand-in hands over to this page.
+  String get dashboardUrl => switch (this) {
+    ListingPlatform.zigbang =>
+      'https://mirror-dimension-lab.pages.dev/zigbang/',
+    ListingPlatform.dabang => 'https://mirror-dimension-lab.pages.dev/dabang/',
+    ListingPlatform.daangn => 'https://mirror-dimension-lab.pages.dev/daangn/',
+  };
+
+  /// Where the agent's live listings are managed — 2022 등록된 광고 보기 and
+  /// 3021 광고 종료 open this.
+  String get listingsUrl => switch (this) {
+    ListingPlatform.zigbang =>
+      'https://mirror-dimension-lab.pages.dev/zigbang/ads/oneroom/?status=open',
+    ListingPlatform.dabang =>
+      'https://mirror-dimension-lab.pages.dev/dabang/room/dabang-list/public/',
+    ListingPlatform.daangn => 'https://mirror-dimension-lab.pages.dev/daangn/',
+  };
+
+  /// The platform's own final 등록 button. Adapters never press it; the agent
+  /// does, and 한방 hears the press.
+  List<String> get submitLabels => switch (this) {
+    ListingPlatform.zigbang => const ['매물 등록 완료'],
+    ListingPlatform.dabang => const ['등록 완료'],
+    ListingPlatform.daangn => const ['매물 등록하기'],
+  };
+
+  /// The platform's own "take this listing down" buttons on [listingsUrl].
+  /// The 당근 mirror has not captured one yet.
+  List<String> get takedownLabels => switch (this) {
+    ListingPlatform.zigbang => const ['매물 종료하기', '매물 종료'],
+    ListingPlatform.dabang => const ['광고 종료', '거래 완료'],
+    ListingPlatform.daangn => const ['거래완료', '미노출'],
+  };
+
   /// The mirror whose own upload handler takes the selected photos, if any.
   PhotoTarget? get photoTarget => switch (this) {
     ListingPlatform.zigbang => null,
@@ -630,3 +666,87 @@ final List<FieldGroup> groups = [
     ),
   ]),
 ];
+
+/// Rows the hi-fi form asks for on top of the 50 master rows. They travel with
+/// the listing and show on 102; no mirror adapter reads them yet, so each one
+/// simply reaches the platform page as an unknown key.
+abstract final class HifiField {
+  static const householdCount = 'householdCount';
+  static const moveInNote = 'moveInNote';
+  static const eContract = 'eContract';
+  static const floorBand = 'floorBand';
+  static const structure = 'structure';
+  static const duplex = 'duplex';
+  static const entranceType = 'entranceType';
+  static const monthlyParkingFee = 'monthlyParkingFee';
+  static const evCharger = 'evCharger';
+  static const tags = 'tags';
+  static const ownerName = 'ownerName';
+  static const brokerageRoute = 'brokerageRoute';
+
+  /// What 자동 채우기 puts in each of them.
+  static const examples = <String, Object>{
+    householdCount: '24',
+    moveInNote: '5월 말 퇴거 예정, 협의 가능',
+    eContract: '가능',
+    floorBand: '중층',
+    entranceType: '계단식',
+    monthlyParkingFee: '2',
+    evCharger: '없음',
+    tags: ['역세권', '채광 좋은 집'],
+    ownerName: '홍길동',
+    brokerageRoute: '일반 의뢰',
+  };
+}
+
+const eContractOptions = ['가능', '불가능'];
+const floorBandOptions = ['저층', '중층', '고층'];
+const structureOptions = ['오픈형', '분리형'];
+const duplexOptions = ['단층', '복층'];
+const entranceOptions = ['계단식', '복도식', '복합식'];
+const availabilityOptions = ['있음', '없음'];
+const tagOptions = ['역세권', '주차가능', '풀옵션', '조용한 동네', '채광 좋은 집'];
+const brokerageRoutes = ['일반 의뢰', '전속 중개', '공동 중개', '기존 고객'];
+
+/// The hi-fi splits the master 가전·가구 row into two chip groups and widens
+/// the 보안 row. Values stay the master spellings the adapters map; only the
+/// label a chip prints may differ ([optionLabel]).
+const homeApplianceOptions = [
+  '에어컨',
+  '세탁기',
+  '건조기',
+  '냉장고',
+  '가스레인지',
+  '인덕션',
+  '전자레인지',
+];
+const furnitureOptions = ['옷장', '신발장', '싱크대', '침대', '책상', '식탁', '쇼파'];
+const securityOptions = [
+  '경비원',
+  '비디오폰',
+  '인터폰',
+  '카드키',
+  'CCTV',
+  '사설경비',
+  '공동현관보안',
+  '방범창',
+  '화재경보기',
+  '베란다/발코니',
+  '테라스',
+  '마당',
+  '무인택배함',
+];
+const evChargerFacility = '전기차 충전시설';
+
+String optionLabel(String value) => switch (value) {
+  '공동현관보안' => '현관보안',
+  '베란다/발코니' => '베란다',
+  _ => value,
+};
+
+/// The master 방 구조 row, rebuilt from the hi-fi's 구조 and 복층 여부.
+String? roomLayoutFrom({String? structure, String? duplex}) {
+  if (duplex == '복층') return '복층형 원룸';
+  if (structure == null) return null;
+  return '$structure 원룸';
+}

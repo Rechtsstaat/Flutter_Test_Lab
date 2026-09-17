@@ -254,8 +254,7 @@ void main() {
 
       BrandButton cta() => tester.widget<BrandButton>(
         find.byWidgetPredicate(
-          (widget) =>
-              widget is BrandButton && widget.label.endsWith('채널에 등록하기'),
+          (widget) => widget is BrandButton && widget.label == '광고 등록',
         ),
       );
 
@@ -267,35 +266,25 @@ void main() {
         reason: '사진이 없어도 등록 CTA 가 활성화되어야 합니다.',
       );
 
-      // The photo picker lives in the last group, which starts collapsed.
+      // The photo strip opens 사진 및 광고 채널, further down the long form.
       await tester.scrollUntilVisible(
-        find.text('5. 입주 및 매물 상세 설명'),
-        400,
-        scrollable: find.byType(Scrollable).first,
-      );
-      await tester.tap(find.text('5. 입주 및 매물 상세 설명'));
-      await tester.pumpAndSettle();
-      await tester.scrollUntilVisible(
-        find.text('사진 선택 (0/20장)'),
+        find.byTooltip('사진 추가'),
         400,
         scrollable: find.byType(Scrollable).first,
       );
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('사진 선택 (0/20장)'));
-      await tester.pumpAndSettle();
+      expect(find.text('0/20'), findsOneWidget);
       await tester.runAsync(() async {
-        await tester.tap(find.text('사진 선택 (0/20장)'));
+        await tester.tap(find.byTooltip('사진 추가'));
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
       await tester.pumpAndSettle();
-      expect(find.text('사진 선택 (1/20장)'), findsOneWidget);
+      expect(find.text('1/20'), findsOneWidget);
       expect(cta().onPressed, isNotNull);
 
-      await tester.ensureVisible(find.byTooltip('1번 사진 삭제'));
-      await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('1번 사진 삭제'));
       await tester.pump();
-      expect(find.text('사진 선택 (0/20장)'), findsOneWidget);
+      expect(find.text('0/20'), findsOneWidget);
 
       await tester.tap(find.text('자동 채우기'));
       await tester.pump();
