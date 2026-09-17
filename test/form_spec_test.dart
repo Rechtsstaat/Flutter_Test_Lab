@@ -66,7 +66,9 @@ void main() {
     },
   );
 
-  testWidgets('all platform CTAs share validation enablement', (tester) async {
+  testWidgets('the register CTA gates on validation and routes the picked channel', (
+    tester,
+  ) async {
     Map<String, dynamic>? receivedValues;
     ListingPlatform? receivedPlatform;
     List<Object>? receivedPhotos;
@@ -82,44 +84,41 @@ void main() {
         ),
       ),
     );
-    await tester.scrollUntilVisible(
-      find.text('당근에 보내기'),
-      600,
-      scrollable: find.byType(Scrollable).first,
+
+    BrandButton cta() => tester.widget<BrandButton>(
+      find.byWidgetPredicate(
+        (widget) => widget is BrandButton && widget.label.endsWith('채널에 등록하기'),
+      ),
     );
 
-    const labels = ['직방에 보내기', '다방에 보내기', '당근에 보내기'];
-    FilledButton button(String label) =>
-        tester.widget(find.widgetWithText(FilledButton, label));
-    for (final label in labels) {
-      expect(button(label).onPressed, isNull, reason: label);
-    }
+    // With nothing filled in, the one CTA gates every selected channel at once.
+    expect(find.text('선택한 3개 채널에 등록하기'), findsOneWidget);
+    expect(cta().onPressed, isNull);
 
-    // 당근 CTA 는 다방 CTA 바로 아래에 있다.
-    expect(
-      tester.getTopLeft(find.text('당근에 보내기')).dy,
-      greaterThan(tester.getTopLeft(find.text('다방에 보내기')).dy),
-    );
+    // Narrowing the channel set has to narrow what the CTA promises.
+    await tester.tap(find.text('직방'));
+    await tester.tap(find.text('당근'));
+    await tester.pump();
+    expect(find.text('선택한 1개 채널에 등록하기'), findsOneWidget);
+    expect(cta().onPressed, isNull);
 
     await tester.tap(find.text('자동 채우기'));
     await tester.pump();
-    for (final label in labels) {
-      expect(button(label).onPressed, isNotNull, reason: label);
-    }
+    expect(cta().onPressed, isNotNull);
 
-    await tester.tap(find.widgetWithText(FilledButton, '다방에 보내기'));
-    await tester.pumpAndSettle();
+    await tester.tap(find.text('선택한 1개 채널에 등록하기'));
+    // The publish flow holds a beat on its progress screen before opening the
+    // mirror, and that screen animates forever — pump past it by hand rather
+    // than waiting for the tree to settle.
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+
     expect(find.text('전송 대상 폼'), findsOneWidget);
     expect(receivedPlatform, ListingPlatform.dabang);
     expect(receivedPhotos, isEmpty);
     expect(receivedValues, isNot(contains('photoCount')));
-
-    Navigator.of(tester.element(find.text('전송 대상 폼'))).pop();
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, '당근에 보내기'));
-    await tester.pumpAndSettle();
-    expect(find.text('전송 대상 폼'), findsOneWidget);
-    expect(receivedPlatform, ListingPlatform.daangn);
     expect(receivedValues, containsPair('address', isNotEmpty));
   });
 

@@ -46,6 +46,12 @@ void main() {
           ),
         );
 
+        // One CTA now posts to every selected channel, so narrow the run to
+        // the channel under test while the picker is still on screen.
+        await tester.tap(find.text('직방'));
+        await tester.tap(find.text('당근'));
+        await tester.pump();
+
         await tester.tap(find.text('자동 채우기'));
         await tester.pump();
         await tester.scrollUntilVisible(
@@ -66,12 +72,11 @@ void main() {
         await tester.pump(const Duration(milliseconds: 300));
         expect(find.text('사진 선택 ($photoCount/20장)'), findsOneWidget);
 
-        await tester.scrollUntilVisible(
-          find.text('다방에 보내기'),
-          500,
-          scrollable: find.byType(Scrollable).first,
-        );
-        await tester.tap(find.text('다방에 보내기'));
+        await tester.tap(find.text('선택한 1개 채널에 등록하기'));
+        // The publish flow holds a beat on its progress screen before opening
+        // the mirror, and that screen animates forever — pump past it by hand.
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
         await tester.pump();
 
         final result = await transferFinished.future.timeout(
