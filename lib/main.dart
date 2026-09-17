@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'android_layout.dart';
+import 'kakao_address.dart';
 import 'photo_transfer.dart';
 
 enum ListingPlatform { zigbang, dabang, daangn }
@@ -202,7 +203,8 @@ final List<FieldGroup> groups = [
       type: InputType.addressSearch,
       required: true,
       example: '서울특별시 강남구 테헤란로 123',
-      unavailableReason: '여기서 저장한 주소는 미러의 카카오 주소 검색 창에 검색어로 그대로 넘어갑니다. 좌표와 우편번호는 그 창에서 결과를 골라야 확정되므로, 전송 화면에서 한 번 눌러 주세요.',
+      unavailableReason:
+          '여기서 저장한 주소는 미러의 카카오 주소 검색 창에 검색어로 그대로 넘어갑니다. 좌표와 우편번호는 그 창에서 결과를 골라야 확정되므로, 전송 화면에서 한 번 눌러 주세요.',
     ),
     MasterField(
       number: 3,
@@ -591,7 +593,8 @@ final List<FieldGroup> groups = [
       label: '매물 사진 첨부',
       type: InputType.photoPicker,
       example: '0',
-      unavailableReason: '사진은 선택 사항입니다. 선택한 사진은 다방·당근 미러에 자동 첨부되며, 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다.',
+      unavailableReason:
+          '사진은 선택 사항입니다. 선택한 사진은 다방·당근 미러에 자동 첨부되며, 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다.',
     ),
     MasterField(
       number: 46,
@@ -738,6 +741,10 @@ class _ListingFormPageState extends State<ListingFormPage> {
           };
         case InputType.addressSearch:
           values[field.key] = field.example;
+          values['roadAddress'] = field.example;
+          // Drop details left over from an earlier real search.
+          values.remove('jibunAddress');
+          values.remove('buildingName');
           values['postalCode'] = '06236';
           values['legalDongCode'] = '1168010100';
         case InputType.photoPicker:
@@ -1043,47 +1050,26 @@ class _ListingFormPageState extends State<ListingFormPage> {
 
   Widget _addressSearchField(MasterField field, String title) {
     final address = values[field.key] as String? ?? '';
+    final jibun = values['jibunAddress'] as String?;
     return ListTile(
       title: Text(title),
       subtitle: Text(
         address.isEmpty
-            ? '검색 후 도로명·우편번호·법정동 코드를 함께 저장합니다.'
-            : '$address\n우편번호 ${values['postalCode'] ?? '-'} · 법정동 ${values['legalDongCode'] ?? '-'}',
+            ? '카카오 우편번호 서비스로 도로명·지번·우편번호·법정동 코드를 함께 저장합니다.'
+            : [
+                address,
+                if (jibun != null && jibun != address) '지번 $jibun',
+                '우편번호 ${values['postalCode'] ?? '-'} · 법정동 ${values['legalDongCode'] ?? '-'}',
+              ].join('\n'),
       ),
       trailing: OutlinedButton(
         child: const Text('주소 검색'),
         onPressed: () async {
-          final result = await showDialog<Map<String, String>>(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('주소 검색'),
-              content: const Text('테스트용 검색 결과'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, {
-                    'address': '서울특별시 강남구 테헤란로 123',
-                    'postalCode': '06236',
-                    'legalDongCode': '1168010100',
-                  }),
-                  child: const Text('테헤란로 123'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(context, {
-                    'address': '서울특별시 강남구 역삼로 100',
-                    'postalCode': '06242',
-                    'legalDongCode': '1168010100',
-                  }),
-                  child: const Text('역삼로 100'),
-                ),
-              ],
-            ),
+          final result = await Navigator.of(context).push<KakaoAddress>(
+            MaterialPageRoute(builder: (_) => const KakaoAddressSearchPage()),
           );
           if (result != null && mounted) {
-            setState(() {
-              values[field.key] = result['address'];
-              values['postalCode'] = result['postalCode'];
-              values['legalDongCode'] = result['legalDongCode'];
-            });
+            setState(() => values.addAll(result.toFormValues()));
           }
         },
       ),
