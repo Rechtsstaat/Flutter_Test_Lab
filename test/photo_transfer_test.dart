@@ -251,25 +251,26 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(home: ListingFormPage(pickImages: () async => [photo])),
       );
+
+      BrandButton cta() => tester.widget<BrandButton>(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is BrandButton && widget.label.endsWith('채널에 등록하기'),
+        ),
+      );
+
       await tester.tap(find.text('자동 채우기'));
       await tester.pump();
-      await tester.scrollUntilVisible(
-        find.text('다방에 보내기'),
-        500,
-        scrollable: find.byType(Scrollable).first,
+      expect(
+        cta().onPressed,
+        isNotNull,
+        reason: '사진이 없어도 등록 CTA 가 활성화되어야 합니다.',
       );
-      for (final label in ['직방에 보내기', '다방에 보내기', '당근에 보내기']) {
-        expect(
-          tester
-              .widget<FilledButton>(find.widgetWithText(FilledButton, label))
-              .onPressed,
-          isNotNull,
-          reason: '사진이 없어도 $label 버튼이 활성화되어야 합니다.',
-        );
-      }
+
+      // The photo picker lives in the last group, which starts collapsed.
       await tester.scrollUntilVisible(
         find.text('5. 입주 및 매물 상세 설명'),
-        -500,
+        400,
         scrollable: find.byType(Scrollable).first,
       );
       await tester.tap(find.text('5. 입주 및 매물 상세 설명'));
@@ -288,40 +289,17 @@ void main() {
       });
       await tester.pumpAndSettle();
       expect(find.text('사진 선택 (1/20장)'), findsOneWidget);
-      await tester.scrollUntilVisible(
-        find.text('다방에 보내기'),
-        500,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(
-        tester
-            .widget<FilledButton>(find.widgetWithText(FilledButton, '다방에 보내기'))
-            .onPressed,
-        isNotNull,
-      );
-      await tester.scrollUntilVisible(
-        find.byTooltip('1번 사진 삭제'),
-        -400,
-        scrollable: find.byType(Scrollable).first,
-      );
-      await tester.pumpAndSettle();
+      expect(cta().onPressed, isNotNull);
+
       await tester.ensureVisible(find.byTooltip('1번 사진 삭제'));
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('1번 사진 삭제'));
       await tester.pump();
+      expect(find.text('사진 선택 (0/20장)'), findsOneWidget);
+
       await tester.tap(find.text('자동 채우기'));
       await tester.pump();
-      await tester.scrollUntilVisible(
-        find.text('다방에 보내기'),
-        500,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(
-        tester
-            .widget<FilledButton>(find.widgetWithText(FilledButton, '다방에 보내기'))
-            .onPressed,
-        isNotNull,
-      );
+      expect(cta().onPressed, isNotNull);
     },
   );
 }
