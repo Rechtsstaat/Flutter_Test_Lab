@@ -66,70 +66,71 @@ void main() {
     },
   );
 
-  testWidgets('the register CTA gates on validation and routes the picked channel', (
-    tester,
-  ) async {
-    Map<String, dynamic>? receivedValues;
-    ListingPlatform? receivedPlatform;
-    List<Object>? receivedPhotos;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: ListingFormPage(
-          remotePageBuilder: (values, platform, photos) {
-            receivedValues = values;
-            receivedPlatform = platform;
-            receivedPhotos = photos;
-            return const Scaffold(body: Text('전송 대상 폼'));
-          },
+  testWidgets(
+    'the register CTA gates on validation and routes the picked channel',
+    (tester) async {
+      Map<String, dynamic>? receivedValues;
+      ListingPlatform? receivedPlatform;
+      List<Object>? receivedPhotos;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ListingFormPage(
+            remotePageBuilder: (values, platform, photos) {
+              receivedValues = values;
+              receivedPlatform = platform;
+              receivedPhotos = photos;
+              return const Scaffold(body: Text('전송 대상 폼'));
+            },
+          ),
         ),
-      ),
-    );
+      );
 
-    BrandButton cta() => tester.widget<BrandButton>(
-      find.byWidgetPredicate(
-        (widget) => widget is BrandButton && widget.label == '광고 등록',
-      ),
-    );
+      BrandButton cta() => tester.widget<BrandButton>(
+        find.byWidgetPredicate(
+          (widget) => widget is BrandButton && widget.label == '광고 등록',
+        ),
+      );
 
-    // With nothing filled in, the one CTA stays off and says why.
-    expect(cta().onPressed, isNull);
-    expect(find.textContaining('필수 항목'), findsOneWidget);
+      // With nothing filled in, the one CTA stays off and says why.
+      expect(cta().onPressed, isNull);
+      expect(find.textContaining('필수 항목'), findsOneWidget);
 
-    // Narrow the run to 다방 in 플랫폼 선택, at the end of the long form.
-    await tester.scrollUntilVisible(
-      find.text('플랫폼 선택'),
-      600,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.ensureVisible(find.text('당근'));
-    await tester.tap(find.text('직방'));
-    await tester.tap(find.text('당근'));
-    await tester.pump();
-    expect(cta().onPressed, isNull);
+      // Narrow the run to 다방 in 플랫폼 선택, at the end of the long form.
+      await tester.scrollUntilVisible(
+        find.text('플랫폼 선택'),
+        600,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.ensureVisible(find.text('당근'));
+      await tester.tap(find.text('직방'));
+      await tester.tap(find.text('당근'));
+      await tester.pump();
+      expect(cta().onPressed, isNull);
 
-    await tester.tap(find.text('자동 채우기'));
-    await tester.pump();
-    expect(cta().onPressed, isNotNull);
-    expect(find.textContaining('필수 항목'), findsNothing);
+      await tester.tap(find.text('자동 채우기'));
+      await tester.pump();
+      expect(cta().onPressed, isNotNull);
+      expect(find.textContaining('필수 항목'), findsNothing);
 
-    await tester.tap(find.text('광고 등록'));
-    // The Process Hub animates for as long as a platform is being worked on,
-    // so pump past the route change by hand.
-    await tester.pump();
-    await tester.pump(const Duration(seconds: 1));
-    await tester.pump();
+      await tester.tap(find.text('광고 등록'));
+      // The Process Hub animates for as long as a platform is being worked on,
+      // so pump past the route change by hand.
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
 
-    expect(find.text('다방에 입력하는 중이에요'), findsOneWidget);
-    expect(find.text('광고 등록 1 / 1'), findsWidgets);
-    // The platform page is mounted under the hub from the start.
-    expect(find.text('전송 대상 폼'), findsOneWidget);
-    expect(receivedPlatform, ListingPlatform.dabang);
-    expect(receivedPhotos, isEmpty);
-    expect(receivedValues, isNot(contains('photoCount')));
-    expect(receivedValues, containsPair('address', isNotEmpty));
-    // The hi-fi's 구조 + 복층 여부 still reach the adapters as 방 구조.
-    expect(receivedValues, containsPair('roomLayout', '오픈형 원룸'));
-  });
+      expect(find.text('다방에 입력하는 중이에요'), findsOneWidget);
+      expect(find.text('광고 등록 1 / 1'), findsWidgets);
+      // The platform page is mounted under the hub from the start.
+      expect(find.text('전송 대상 폼'), findsOneWidget);
+      expect(receivedPlatform, ListingPlatform.dabang);
+      expect(receivedPhotos, isEmpty);
+      expect(receivedValues, isNot(contains('photoCount')));
+      expect(receivedValues, containsPair('address', isNotEmpty));
+      // The hi-fi's 구조 + 복층 여부 still reach the adapters as 방 구조.
+      expect(receivedValues, containsPair('roomLayout', '오픈형 원룸'));
+    },
+  );
 
   testWidgets('입력 과정 보기 lifts the platform page out of the hub', (
     tester,
@@ -306,13 +307,211 @@ void main() {
         'https://postcode.map.kakao.com',
         'https://postcode.map.daum.net',
       ]);
-      // 사용자가 검색어를 바꿔 다시 찾으면 자동 선택하지 않는다.
-      expect(script, contains('if (squash(query) !== squash(target)) return;'));
+      // 다방은 documentEnd 뒤에 검색어와 후보를 늦게 채우므로 둘을 deadline
+      // 안에서 기다린다. 완료 표시는 실제 후보를 누르기 직전에만 남긴다.
+      expect(script, contains('const deadline = Date.now() + 12000'));
+      expect(script, contains('const value = query();'));
+      expect(script, contains('window.__flrPickerRunning = true'));
+      expect(
+        script.indexOf('window.__flrPickerRan = true'),
+        greaterThan(script.indexOf('const first = await waitFor')),
+      );
       expect(script, contains("sessionStorage.getItem('flrPicked')"));
       // 후보는 카카오가 붙여 둔 한글 주소 속성에서 읽는다.
       expect(script, contains("span.txt_address[data-addr]"));
       // 점수가 같으면 카카오가 준 순서대로 — 맨 위가 이긴다.
       expect(script, contains('weighted > winner.weighted'));
+    },
+  );
+
+  test('Kakao picker waits for a query and candidates populated later', () {
+    final picker = addressPickerFrameScript('"서울특별시 강남구 테헤란로 123"');
+    final temp = File(
+      '${Directory.systemTemp.path}/delayed_picker_${DateTime.now().microsecondsSinceEpoch}.js',
+    );
+    try {
+      temp.writeAsStringSync('''
+let clicks = 0;
+const clickedAddresses = [];
+let queryReady = false;
+let candidateAddress = '';
+global.window = global;
+global.location = {hostname: 'postcode.map.kakao.com', search: ''};
+global.sessionStorage = {
+  values: {},
+  getItem(key) { return this.values[key] || null; },
+  setItem(key, value) { this.values[key] = value; },
+};
+const button = {scrollIntoView() {}, click() { clicks++; clickedAddresses.push(candidateAddress); }};
+const span = {
+  querySelector(selector) { return selector === 'button.link_post' ? button : null; },
+  getAttribute(name) {
+    if (name === 'data-addr') return candidateAddress;
+    if (name === 'data-addr_type') return 'R';
+    return null;
+  },
+};
+global.document = {
+  readyState: 'complete',
+  getElementById(id) { return id === 'cQuery' && queryReady ? {value: '서울특별시 강남구 테헤란로 123'} : null; },
+  querySelectorAll(selector) { return selector === 'span.txt_address[data-addr]' && candidateAddress ? [span] : []; },
+  querySelector() { return null; },
+};
+setTimeout(() => { queryReady = true; }, 30);
+// 이전 검색 결과가 먼저 남아 있어도 절대 누르지 않고 새 결과를 기다린다.
+setTimeout(() => { candidateAddress = '서울 강남구 다른로 999'; }, 60);
+setTimeout(() => { candidateAddress = '서울 강남구 테헤란로 123'; }, 140);
+$picker
+setTimeout(() => {
+  if (clicks !== 1 || clickedAddresses[0] !== '서울 강남구 테헤란로 123' || window.__flrPickerRan !== true || window.__flrPickerRunning !== false) {
+    console.error(JSON.stringify({clicks, clickedAddresses, ran: window.__flrPickerRan, running: window.__flrPickerRunning}));
+    process.exit(1);
+  }
+  process.exit(0);
+}, 2800);
+''');
+      final result = Process.runSync('node', [temp.path]);
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    } finally {
+      if (temp.existsSync()) temp.deleteSync();
+    }
+  });
+
+  test('Dabang uses complex search for apartment and officetel addresses', () {
+    for (final property in ['아파트', '오피스텔 원룸형', '오피스텔 분리/투룸형']) {
+      final script = dabangInjectionScript(
+        '{"propertyType":"$property","address":"서울특별시 강남구 역삼동 테헤란로 123","buildingName":"테헤란아파트"}',
+      );
+      expect(script, contains('await enterComplexAddress'));
+      expect(script, contains("ul[class*=SearchList] > li"));
+      expect(script, contains('[class*=AddressList]'));
+      expect(script, contains('data.buildingName'));
+      expect(script, contains('filled(data.address) && !complexProperty'));
+    }
+  });
+
+  test(
+    'Dabang executes complex selection without a building name and switches majors',
+    () {
+      for (final scenario in [
+        ('아파트', '오피스텔', false),
+        ('오피스텔 원룸형', '아파트', false),
+        ('아파트', '오피스텔', true),
+      ]) {
+        final targetLabel = scenario.$1.startsWith('오피스텔') ? '오피스텔' : '아파트';
+        final picker = dabangInjectionScript(
+          '{"propertyType":"${scenario.$1}","address":"서울특별시 강남구 테헤란로 123",'
+          '"roadAddress":"서울특별시 강남구 테헤란로 123",'
+          '"jibunAddress":"서울특별시 강남구 역삼동 123","noManagementFee":true}',
+        );
+        final temp = File(
+          '${Directory.systemTemp.path}/complex_picker_${DateTime.now().microsecondsSinceEpoch}.js',
+        );
+        try {
+          temp.writeAsStringSync('''
+let selectedMajor = '${scenario.$2}';
+let picked = false;
+let report = null;
+class FakeControl {
+  constructor(tagName) { this.tagName = tagName; this._value = ''; this.disabled = false; }
+  get value() { return this._value; }
+  set value(value) { this._value = String(value); }
+  focus() {} blur() {} dispatchEvent() { return true; }
+}
+global.HTMLSelectElement = class extends FakeControl {
+  get value() { return this._value; } set value(value) { this._value = String(value); }
+};
+global.HTMLInputElement = class extends FakeControl {
+  get value() { return this._value; } set value(value) { this._value = String(value); }
+};
+global.HTMLTextAreaElement = class extends FakeControl {
+  get value() { return this._value; } set value(value) { this._value = String(value); }
+};
+global.Event = class { constructor(type) { this.type = type; } };
+global.PointerEvent = global.Event;
+global.MouseEvent = global.Event;
+global.MutationObserver = class { observe() {} };
+const option = (value, label) => ({value, textContent: label});
+const selects = [
+  Object.assign(new HTMLSelectElement('SELECT'), {options: [option('', '선택'), option('서울', '서울')]}),
+  Object.assign(new HTMLSelectElement('SELECT'), {options: [option('', '선택'), option('강남구', '강남구')]}),
+  Object.assign(new HTMLSelectElement('SELECT'), {options: [option('', '선택'), option('역삼동', '역삼동')]}),
+];
+const candidateButton = {dispatchEvent(event) { if (event.type === 'click') picked = true; }};
+const candidate = {
+  textContent: '건물명 없는 후보',
+  attributes: ${scenario.$3 ? '[]' : "[{name: 'data-road-address', value: '서울특별시 강남구 테헤란로 123'}]"},
+  getAttribute(name) { return ${scenario.$3 ? 'null' : "name === 'data-road-address' ? '서울특별시 강남구 테헤란로 123' : null"}; },
+  querySelector() { return candidateButton; },
+};
+const otherCandidate = {
+  textContent: '다른 건물명 없는 후보', attributes: [],
+  getAttribute() { return null; }, querySelector() { return candidateButton; },
+};
+const summary = {textContent: '도로명 서울특별시 강남구 테헤란로 123 지번 서울특별시 강남구 역삼동 123'};
+const cell = {
+  tagName: 'TD',
+  querySelectorAll(selector) {
+    if (selector === 'select') return selects;
+    if (selector === 'ul[class*=SearchList] > li') return ${scenario.$3 ? '[candidate, otherCandidate]' : '[candidate]'};
+    if (selector === '[class*=AddressList] li') return [];
+    if (selector === 'button') return [];
+    return [];
+  },
+  querySelector(selector) {
+    if (selector === '[class*=AddressList]') return picked ? summary : null;
+    return null;
+  },
+};
+const th = {textContent: '매물 주소', nextElementSibling: cell};
+const root = {
+  querySelectorAll(selector) {
+    if (selector === 'th') return [th];
+    if (selector === 'tr') return [];
+    return [];
+  },
+};
+const majorButton = label => ({
+  textContent: label,
+  className: '',
+  getAttribute(name) { return name === 'aria-pressed' ? String(selectedMajor === label) : null; },
+  querySelector() { return null; },
+  dispatchEvent(event) { if (event.type === 'click') selectedMajor = label; },
+});
+const majorButtons = [majorButton('주택'), majorButton('오피스텔'), majorButton('아파트')];
+global.window = global;
+global.document = {
+  body: {},
+  getElementById(id) { return id === 'room_info' ? root : null; },
+  querySelector(selector) { return selector === '#room_info input[name="buildingType"]' ? null : null; },
+  querySelectorAll(selector) { return selector === 'button' ? majorButtons : []; },
+};
+global.ListingResult = {postMessage(value) {
+  report = JSON.parse(value);
+  const addressMissing = report.missing.some(item => item.startsWith('address:'));
+  const correct = ${scenario.$3 ? '!picked && addressMissing' : 'picked && !addressMissing'};
+  if (selectedMajor !== '$targetLabel' || !correct) {
+    console.error(JSON.stringify({selectedMajor, picked, report}));
+    process.exit(1);
+  }
+  process.exit(0);
+}};
+$picker
+setTimeout(() => {
+  console.error(JSON.stringify({failure: 'timeout', selectedMajor, picked, report}));
+  process.exit(1);
+}, 10000);
+''');
+          final result = Process.runSync('node', [temp.path]);
+          expect(
+            result.exitCode,
+            0,
+            reason: '${scenario.$1}: ${result.stdout}\n${result.stderr}',
+          );
+        } finally {
+          if (temp.existsSync()) temp.deleteSync();
+        }
+      }
     },
   );
 
