@@ -1582,11 +1582,26 @@ const _daangnAdapterBody = r'''
 })();
 ''';
 
+/// The frames [addressPickerFrameScript] works in. Android only lets the script
+/// into these origins; iOS runs it in every frame and the script checks the
+/// host itself.
+const kakaoPostcodeOrigins = [
+  'https://postcode.map.kakao.com',
+  'https://postcode.map.daum.net',
+];
+
 String addressPickerFrameScript(String target) =>
     '''
-(() => {
+(function pick() {
   // Runs in EVERY frame, so leave the mirror page alone.
   if (!/^postcode\\.map\\.(kakao\\.com|daum\\.net)\$/.test(location.hostname)) return;
+  // Android puts this in as the document starts, before the result list exists.
+  // Kakao binds the result buttons in its own jQuery ready handler, so wait
+  // until every DOMContentLoaded listener has run — where iOS injects it.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(pick), {once: true});
+    return;
+  }
   if (window.__flrPickerRan) return;
   window.__flrPickerRan = true;
 

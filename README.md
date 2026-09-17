@@ -61,11 +61,14 @@
 
 직방·다방 미러는 주소를 카카오 우편번호 서비스로 받습니다(당근은 아래 「당근 미러」 참고). 카카오의 `Postcode.open()` 은 `window.open()` 으로 별도 창을 띄우는데, WKWebView 에는 팝업 창이 없어 그 요청이 같은 웹 뷰에 실리면서 미러 폼이 빈 화면으로 덮였습니다. 지금은 `daum.Postcode` 를 감싸 두고 `open()` 요청을 **같은 인스턴스의 `embed()`** 로 바꿔, 페이지 안에 세운 전체 화면 겹에 그립니다. 미러가 넘긴 `oncomplete` 를 그대로 살려 두므로 주소를 고른 뒤의 흐름(다방의 동·호 활성화와 건축물대장 창, 직방의 주소 칸 채움과 소재지 공개 확인 창)이 원래대로 이어집니다. 기기의 뒤로 가기는 이 겹을 먼저 닫습니다.
 
-검색 결과 선택까지 자동입니다. 카카오 결과 목록은 `postcode.map.kakao.com` 에서 온 **교차 출처 iframe** 안에 있어, 미러 페이지에서 실행하는 스크립트로는 읽을 수도 누를 수도 없습니다(`WebViewController.runJavaScript` 는 최상위 프레임만 닿습니다). 그래서 WKWebView 가 제공하는 `WKUserScript(forMainFrameOnly: false)` 로 **그 프레임 안에서** 도는 스크립트를 넣습니다. webview_flutter 가 `WKWebViewConfiguration` 을 밖으로 내주지 않으므로, 플러그인이 JavaScript 채널을 등록할 때 쓰는 `addScriptMessageHandler:name:` 을 바꿔 끼워 같은 content controller 를 잡습니다 (`ios/Runner/FrameScriptBridge.swift`).
+검색 결과 선택까지 자동입니다. 카카오 결과 목록은 `postcode.map.kakao.com` 에서 온 **교차 출처 iframe** 안에 있어, 미러 페이지에서 실행하는 스크립트로는 읽을 수도 누를 수도 없습니다(`WebViewController.runJavaScript` 는 최상위 프레임만 닿습니다). 그래서 **그 프레임 안에서** 도는 스크립트를 플랫폼마다 네이티브로 넣습니다.
+
+- **iOS**: WKWebView 의 `WKUserScript(forMainFrameOnly: false)` 를 씁니다. webview_flutter 가 `WKWebViewConfiguration` 을 밖으로 내주지 않으므로, 플러그인이 JavaScript 채널을 등록할 때 쓰는 `addScriptMessageHandler:name:` 을 바꿔 끼워 같은 content controller 를 잡습니다 (`ios/Runner/FrameScriptBridge.swift`).
+- **Android**: AndroidX WebKit 의 `WebViewCompat.addDocumentStartJavaScript` 를 씁니다. Dart 쪽이 `AndroidWebViewController.webViewIdentifier` 를 넘기면 `WebViewFlutterAndroidExternalApi.getWebView` 로 그 WebView 를 찾아, 카카오 출처(`kakaoPostcodeOrigins`)의 프레임에만 스크립트를 넣습니다 (`android/app/src/main/kotlin/.../FrameScriptBridge.kt`). 문서가 시작될 때 들어가므로 스크립트는 `DOMContentLoaded` 까지 기다렸다가 돕니다.
 
 프레임 안 스크립트는 카카오가 각 후보에 붙여 둔 한글 주소(`span.txt_address[data-addr]`)를 통합 폼 주소와 견줍니다. 시·도 축약형(`서울` ↔ `서울특별시`)을 맞추고 괄호 안 건물명을 뺀 뒤, 앞에서부터 겹치는 길이와 번지 일치 여부로 점수를 매겨 가장 높은 후보를 누릅니다. 점수가 같거나 판단 근거가 없으면 카카오가 관련도 순으로 준 **맨 위 항목**을 고릅니다. 도로명 하나에 지번이 여럿이면 뒤따르는 지번 선택 화면도 같은 기준으로 한 번 더 고릅니다.
 
-자동 선택은 **앱이 넣은 검색어 그대로일 때 한 번만** 동작합니다. 사용자가 검색창을 고쳐 다른 곳을 찾으면 그 선택은 건드리지 않습니다. 자동 선택이 되지 않는 환경(안드로이드 등)에서는 화면이 그대로 떠 있어 직접 고르면 되고, 결과 화면 상태줄에 `주소 자동 선택` 표시로 어느 쪽인지 알려 줍니다.
+자동 선택은 **앱이 넣은 검색어 그대로일 때 한 번만** 동작합니다. 사용자가 검색창을 고쳐 다른 곳을 찾으면 그 선택은 건드리지 않습니다. 자동 선택이 되지 않는 환경(문서 시작 스크립트를 지원하지 않는 오래된 Android System WebView 등)에서는 화면이 그대로 떠 있어 직접 고르면 되고, 결과 화면 상태줄에 `주소 자동 선택` 표시로 어느 쪽인지 알려 줍니다.
 
 다방의 건축물대장 자동 조회 창은 이미 입력한 면적·용도·승인일이 공공데이터 값으로 덮어써지지 않도록 「직접 입력」으로 닫고 그 사실을 제한 사유에 남깁니다.
 
@@ -137,6 +140,7 @@ flutter test integration_test/dabang_photo_upload_test.dart -d '<시뮬레이터
 | `lib/photo_transfer.dart` | 다방·당근 미러의 사진 선택란으로 사진을 전달하는 브리지 |
 | `assets/zigbang/zigbang_listing_form.html` | 초기 실험에 쓰던 로컬 직방 재현 폼 (현재 코드는 원격 미러를 사용) |
 | `ios/Runner/FrameScriptBridge.swift` | 교차 출처 iframe 안까지 스크립트를 넣는 WKWebView 브리지 |
+| `android/app/src/main/kotlin/com/example/jibang_listing_test/FrameScriptBridge.kt` | 같은 일을 하는 Android WebView 브리지 (AndroidX WebKit 문서 시작 스크립트) |
 | `test/form_spec_test.dart` | 폼 사양 및 어댑터 테스트 |
 | `integration_test/daangn_form_injection_test.dart` | 당근 미러 실제 주입 결과를 DOM으로 확인하는 시뮬레이터 테스트 |
 | `부동산3사_통합_기능명세서.md` | 당근·다방·직방 통합 필드 및 기능 명세 |

@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart'
+    show AndroidWebViewController;
 
 import 'android_layout.dart';
 import 'design/tokens.dart';
@@ -189,8 +191,10 @@ class MirrorSession extends MirrorPage {
     status = '${platform.label} 페이지를 여는 중…';
   }
 
-  /// The Kakao postcode result list lives in a cross-origin iframe that only
-  /// a WKWebView user script can reach. Only iOS provides the bridge.
+  /// The Kakao postcode result list lives in a cross-origin iframe that only a
+  /// native frame script can reach: a WKWebView user script on iOS, an
+  /// AndroidX document-start script on Android. Both bridges are named
+  /// `FrameScriptBridge`.
   static const _frameScripts = MethodChannel('jikbang/frame_script');
 
   final Map<String, dynamic> values;
@@ -339,14 +343,25 @@ class MirrorSession extends MirrorPage {
   /// is why this runs with the rest of the injection rather than when the
   /// address search opens.
   Future<bool> _installFramePicker(String address) async {
+    final script = addressPickerFrameScript(jsonEncode(address));
+    final native = controller.platform;
+    // iOS finds the newest web view on its own. Android has to be told which
+    // one, and only lets the script into the Kakao origins.
+    final Object arguments = native is AndroidWebViewController
+        ? {
+            'script': script,
+            'webView': native.webViewIdentifier,
+            'origins': kakaoPostcodeOrigins,
+          }
+        : script;
     try {
       final installed = await _frameScripts.invokeMethod<bool>(
         'setFrameScript',
-        addressPickerFrameScript(jsonEncode(address)),
+        arguments,
       );
       return installed ?? false;
     } on MissingPluginException {
-      // Android and the tests have no frame-script bridge: the agent picks.
+      // The tests have no frame-script bridge: the agent picks.
       return false;
     } on PlatformException {
       return false;

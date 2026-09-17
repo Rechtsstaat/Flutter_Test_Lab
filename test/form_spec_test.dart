@@ -293,6 +293,19 @@ void main() {
       final script = addressPickerFrameScript('"서울특별시 강남구 테헤란로 123"');
       // 이 스크립트는 모든 프레임에서 돈다 — 미러 페이지는 건드리면 안 된다.
       expect(script, contains(r"/^postcode\.map\.(kakao\.com|daum\.net)$/"));
+      // 안드로이드는 문서 시작 때 넣는다. 카카오가 결과 버튼에 클릭 처리기를 붙인
+      // 뒤(DOMContentLoaded 처리기들이 다 돈 뒤)에 눌러야 선택이 먹힌다.
+      expect(
+        script,
+        contains(
+          "document.addEventListener('DOMContentLoaded', () => setTimeout(pick)",
+        ),
+      );
+      // 안드로이드가 스크립트를 들여보내는 출처도 같은 두 호스트다.
+      expect(kakaoPostcodeOrigins, [
+        'https://postcode.map.kakao.com',
+        'https://postcode.map.daum.net',
+      ]);
       // 사용자가 검색어를 바꿔 다시 찾으면 자동 선택하지 않는다.
       expect(script, contains('if (squash(query) !== squash(target)) return;'));
       expect(script, contains("sessionStorage.getItem('flrPicked')"));
