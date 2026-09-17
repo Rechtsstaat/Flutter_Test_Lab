@@ -54,3 +54,6 @@ app.*.map.json
 /FLUTTER_APP_README.md
 /나열_카테고라이즈.md
 /나열_필수or선택.md
+
+# oh-my-claudecode local state
+.omc/

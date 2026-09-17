@@ -12,5 +12,10 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    // Must run before the first web view is built: it swaps the method the
+    // plugin uses to register our JavaScript channel.
+    FrameScriptBridge.start(
+      with: engineBridge.pluginRegistry.registrar(forPlugin: "FrameScriptBridge")!
+    )
   }
 }
