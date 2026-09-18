@@ -414,6 +414,21 @@ class MirrorLogin extends MirrorPage {
   }
 }
 
+/// 로그아웃이 지워야 하는 나머지 반쪽 — 플랫폼이 웹뷰에 심어 둔 로그인.
+///
+/// 저장소는 앱에 하나뿐이라(안드로이드 `CookieManager`·`WebStorage`, iOS 는 기본
+/// `WKWebsiteDataStore`) 어느 컨트롤러에서 지우든 **세 플랫폼이 한꺼번에** 지워진다.
+/// 그래서 「직방만 연동 해제」에는 쓸 수 없다.
+///
+/// 쿠키만으로는 모자란다. 세션을 쿠키에 담는 플랫폼도 있고 토큰을 localStorage 에
+/// 두는 플랫폼도 있어서, 어느 쪽인지 모르는 채로 둘 다 지운다.
+Future<void> clearPlatformSessions() async {
+  await WebViewCookieManager().clearCookies();
+  final controller = WebViewController();
+  await controller.clearLocalStorage();
+  await controller.clearCache();
+}
+
 /// Installs a capture-phase listener that reports trusted presses of the
 /// buttons named in [labels] to the `MirrorPress` channel. Installing it twice
 /// only swaps the labels.
