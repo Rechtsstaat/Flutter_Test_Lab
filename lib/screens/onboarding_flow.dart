@@ -24,18 +24,17 @@ class OnboardingFlow extends StatefulWidget {
 }
 
 class _OnboardingFlowState extends State<OnboardingFlow> {
-  final _picked = <ListingPlatform>{
-    ListingPlatform.zigbang,
-    ListingPlatform.dabang,
-  };
+  // 쓸 수 있는 플랫폼은 처음부터 골라 둔다. 새 플랫폼이 들어오면 여기에 저절로 들어온다
+  final _picked = livePlatforms.toSet();
   final _connected = <ListingPlatform>{};
 
   _Stage _stage = _Stage.select;
   int _index = 0;
   MirrorLogin? _login;
 
+  // 잠시 내려 둔 플랫폼은 고를 수도 없지만, 큐에서도 한 번 더 거른다
   List<ListingPlatform> get _queue =>
-      ListingPlatform.values.where(_picked.contains).toList(growable: false);
+      livePlatforms.where(_picked.contains).toList(growable: false);
 
   @override
   void dispose() {
@@ -111,6 +110,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         key: const ValueKey('select'),
         picked: _picked,
         onToggle: (platform) => setState(() {
+          if (!platform.isLive) return;
           if (!_picked.remove(platform)) _picked.add(platform);
         }),
         onNext: _picked.isEmpty ? null : () => _openLogin(0),
@@ -186,6 +186,7 @@ class _SelectStep extends StatelessWidget {
             ),
           ),
           const SizedBox(height: Space.s24),
+          // 잠시 내려 둔 플랫폼도 **자리는 남겨 둔다** — 회색으로 「준비 중」이라고 적는다
           for (final (index, platform) in ListingPlatform.values.indexed)
             FadeSlideIn(
               delay: Duration(milliseconds: 100 + index * 50),
@@ -194,6 +195,8 @@ class _SelectStep extends StatelessWidget {
                 child: SelectCard(
                   platform: platform,
                   selected: picked.contains(platform),
+                  enabled: platform.isLive,
+                  note: platform.pausedNote,
                   onTap: () => onToggle(platform),
                 ),
               ),

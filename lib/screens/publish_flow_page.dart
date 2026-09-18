@@ -62,8 +62,14 @@ class PublishFlowPage extends StatefulWidget {
 }
 
 class _PublishFlowPageState extends State<PublishFlowPage> {
+  /// 잠시 내려 둔 플랫폼은 **흐름에 들어오지 못한다.** 화면에서 이미 걸러지지만,
+  /// 예전 매물을 다시 올리는 길로도 들어올 수 있어 문 앞에서 한 번 더 거른다.
+  late final List<ListingPlatform> _channels = widget.channels
+      .where((platform) => platform.isLive)
+      .toList(growable: false);
+
   late final Map<ListingPlatform, ChannelState> _states = {
-    for (final platform in widget.channels) platform: ChannelState.pending,
+    for (final platform in _channels) platform: ChannelState.pending,
   };
   late final Map<ListingPlatform, DateTime> _dates = {
     ...widget.listing.channelDates,
@@ -106,7 +112,7 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
 
   void _next() {
     if (!mounted) return;
-    final waiting = widget.channels.where(
+    final waiting = _channels.where(
       (platform) => _states[platform] == ChannelState.pending,
     );
     if (waiting.isEmpty) {
@@ -307,21 +313,21 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
   Widget _hub() {
     final active = _active;
     final rows = [
-      for (final platform in widget.channels)
+      for (final platform in _channels)
         Padding(
           padding: const EdgeInsets.only(bottom: Space.s8),
           child: _row(platform),
         ),
     ];
     if (active != null) {
-      final step = widget.channels.indexOf(active) + 1;
+      final step = _channels.indexOf(active) + 1;
       final retrying = _retried.contains(active);
       return _HubLayout(
         key: const ValueKey('working'),
         progress: StepProgress(
-          total: widget.channels.length,
+          total: _channels.length,
           current: step,
-          label: '광고 등록 $step / ${widget.channels.length}',
+          label: '광고 등록 $step / ${_channels.length}',
         ),
         title: retrying
             ? '${active.label} 등록을 다시 시도하고 있어요'
@@ -349,16 +355,16 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
       );
     }
 
-    final published = widget.channels
+    final published = _channels
         .where((p) => _states[p] == ChannelState.published)
         .toList();
-    final retryable = widget.channels.where(
+    final retryable = _channels.where(
       (p) => _states[p] == ChannelState.failed && !_retried.contains(p),
     );
-    final checks = widget.channels.where(
+    final checks = _channels.where(
       (p) => _states[p] == ChannelState.needsCheck,
     );
-    final given = widget.channels.where(
+    final given = _channels.where(
       (p) => _states[p] == ChannelState.failed && _retried.contains(p),
     );
     final OutcomeKind kind;
@@ -382,7 +388,7 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
           '${given.map((p) => p.label).join('·')}은 연결이 원활해지면\n다시 등록할 수 있어요';
     } else {
       kind = OutcomeKind.success;
-      title = widget.channels.length == 1
+      title = _channels.length == 1
           ? '${published.first.label}에 광고를 등록 했어요'
           : '모든 플랫폼에 등록 했어요';
     }
@@ -404,11 +410,11 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
 
   Widget _formChrome(ListingPlatform platform) {
     if (platform == _active) {
-      final step = widget.channels.indexOf(platform) + 1;
+      final step = _channels.indexOf(platform) + 1;
       return StepProgress(
-        total: widget.channels.length,
+        total: _channels.length,
         current: step,
-        label: '광고 등록 $step / ${widget.channels.length}',
+        label: '광고 등록 $step / ${_channels.length}',
         onBack: _backToHub,
       );
     }

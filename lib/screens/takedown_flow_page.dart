@@ -32,6 +32,11 @@ class TakedownFlowPage extends StatefulWidget {
 }
 
 class _TakedownFlowPageState extends State<TakedownFlowPage> {
+  /// 잠시 내려 둔 플랫폼은 종료 흐름에도 들어오지 못한다 (publish 와 같은 이유).
+  late final List<ListingPlatform> _channels = widget.channels
+      .where((platform) => platform.isLive)
+      .toList(growable: false);
+
   final _removed = <ListingPlatform>{};
   final _skipped = <ListingPlatform>{};
   final _pages = <ListingPlatform, MirrorPage>{};
@@ -45,6 +50,11 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
   @override
   void initState() {
     super.initState();
+    // 내릴 곳이 하나도 안 남았으면(전부 잠시 내려 둔 플랫폼이었으면) 곧바로 결과로 간다
+    if (_channels.isEmpty) {
+      _done = true;
+      return;
+    }
     _open(0);
   }
 
@@ -57,7 +67,7 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
   }
 
   void _open(int index) {
-    final platform = widget.channels[index];
+    final platform = _channels[index];
     _pages[platform] = MirrorPage(
       platform: platform,
       url: Uri.parse(platform.listingsUrl),
@@ -77,7 +87,7 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
   }
 
   Future<void> _advance() async {
-    if (_index + 1 < widget.channels.length) {
+    if (_index + 1 < _channels.length) {
       setState(() => _open(_index + 1));
       return;
     }
@@ -100,7 +110,7 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
       }
       return;
     }
-    final page = _pages[widget.channels[_index]];
+    final page = _pages[_channels[_index]];
     if (await page?.closeOverlay() ?? false) return;
     if (!mounted) return;
     final skip = await showDialog<bool>(
@@ -108,7 +118,7 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
       builder: (context) => AlertDialog(
         backgroundColor: AppColor.bgSurface,
         title: Text(
-          '${widget.channels[_index].label} 광고를 그대로 둘까요?',
+          '${_channels[_index].label} 광고를 그대로 둘까요?',
           style: AppText.title,
         ),
         content: const Text(
@@ -128,7 +138,7 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
       ),
     );
     if (skip == true && mounted) {
-      _skipped.add(widget.channels[_index]);
+      _skipped.add(_channels[_index]);
       await _advance();
     }
   }
@@ -140,7 +150,7 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
 
   @override
   Widget build(BuildContext context) {
-    final current = widget.channels[_index];
+    final current = _channels[_index];
     final front = _done ? _viewing : current;
     // All pages stay mounted; the one in front is painted last.
     final order = [
@@ -172,10 +182,10 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
                             onBack: _back,
                           )
                         : StepProgress(
-                            total: widget.channels.length,
+                            total: _channels.length,
                             current: _index + 1,
                             label:
-                                '광고 종료 ${_index + 1} / ${widget.channels.length}',
+                                '광고 종료 ${_index + 1} / ${_channels.length}',
                             onBack: _back,
                           ),
                   ),
@@ -234,7 +244,7 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
                           widget.listing,
                       removed: _removed,
                       skipped: _skipped,
-                      channels: widget.channels,
+                      channels: _channels,
                       onView: (platform) => setState(() => _viewing = platform),
                       onHome: _home,
                     ),
