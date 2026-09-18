@@ -728,6 +728,7 @@ String dabangInjectionScript(String payload) =>
     '오피스텔 원룸형': ['오피스텔', null], '오피스텔 분리/투룸형': ['오피스텔', null],
     '아파트': ['아파트', null],
   };
+  let complexProperty = false;
   const applyPropertyType = async () => {
     const mapping = PROPERTY[data.propertyType];
     if (!mapping) {
@@ -737,9 +738,17 @@ String dabangInjectionScript(String payload) =>
     const [major, minor] = mapping;
     // 대분류는 소분류 라디오(주택/빌라)나 단지 검색 칸(오피스텔·아파트)의 유무로 알아본다.
     const isHouse = () => !!document.querySelector('#room_info input[name="buildingType"]');
-    if (major === '주택' ? !isHouse() : isHouse()) {
-      const button = [...(rowOf('room_info', '매물유형') || document).querySelectorAll('button')]
-        .find(item => norm(text(item)).startsWith(norm(major)));
+    const majorButton = () => [...(rowOf('room_info', '매물유형') || document).querySelectorAll('button')]
+      .find(item => norm(text(item)).startsWith(norm(major)));
+    const selected = button => !!button && (
+      button.getAttribute('aria-pressed') === 'true' || button.getAttribute('aria-selected') === 'true' ||
+      /(^|[\\s_-])(active|selected|checked|on)([\\s_-]|\$)/i.test(button.className || '') ||
+      !!button.querySelector('input:checked'));
+    // 주택/비주택 DOM만 보면 아파트와 오피스텔을 구분할 수 없다. 선택 표식이
+    // 확실하지 않은 비주택 버튼은 다시 눌러도 멱등이므로 눌러 목표 대분류를 보장한다.
+    const button = majorButton();
+    const mustSwitch = major === '주택' ? !isHouse() : isHouse() || !selected(button);
+    if (mustSwitch) {
       if (!button) { miss('propertyType', '대분류 「' + major + '」 버튼을 찾지 못했습니다.'); return false; }
       press(button);
       // 대분류를 바꾸면 매물 정보·추가 정보의 7개 행이 통째로 다시 그려진다.
@@ -747,12 +756,94 @@ String dabangInjectionScript(String payload) =>
       await sleep(REACT);
     }
     if (!minor) {
+      complexProperty = true;
       ok();
-      note('매물 주소(' + major + '): 다방은 이 대분류에서 시/도 → 시/군/구 → 동 → 단지 순으로 고르는 단지 검색만 지원해 자동으로 확정할 수 없습니다. 화면에서 직접 골라 주세요.');
       return true;
     }
     // 소분류 라디오는 매물유형 행의 두 번째 칸에 있다.
     return choose('propertyType', () => rowOf('room_info', '매물유형'), minor);
+  };
+
+  // 아파트·오피스텔은 카카오 우편번호 대신 시/도 → 시/군/구 → 동 → 단지를
+  // 차례로 고른다. 통합 주소에 들어 있는 지역명과 카카오가 돌려준 건물명을 쓴다.
+  const enterComplexAddress = async major => {
+    if (!filled(data.address)) return false;
+    const wantedAddresses = [data.address, data.roadAddress, data.jibunAddress]
+      .filter(filled).map(norm);
+    const wantedAddress = wantedAddresses.join('|');
+    const wantedBuilding = norm(data.buildingName);
+    const selectAt = index => {
+      const cell = addressCell();
+      return cell ? cell.querySelectorAll('select')[index] : null;
+    };
+    for (let index = 0; index < 3; index++) {
+      const element = await waitUntil(() => {
+        const candidate = selectAt(index);
+        return candidate && !candidate.disabled && candidate.options.length > 1 ? candidate : null;
+      }, 5000);
+      if (!element) {
+        miss('address', major + ' 단지 검색의 ' + (index + 1) + '번째 지역 선택란이 준비되지 않았습니다.');
+        return false;
+      }
+      const option = [...element.options].filter(item => item.value !== '')
+        .find(item => wantedAddress.includes(norm(text(item))) || wantedAddress.includes(norm(item.value)));
+      if (!option) {
+        miss('address', '주소 「' + data.address + '」에 맞는 ' + (index + 1) + '번째 지역 선택지를 찾지 못했습니다.');
+        return false;
+      }
+      if (!await select('address.region.' + index, () => selectAt(index), option.value, 5000)) return false;
+    }
+
+    const list = await waitUntil(() => {
+      const cell = addressCell();
+      const items = cell ? [...cell.querySelectorAll('ul[class*=SearchList] > li')] : [];
+      return items.length ? items : null;
+    }, 8000);
+    if (!list) {
+      miss('address', major + ' 단지 목록이 검색 뒤에도 나타나지 않았습니다.');
+      return false;
+    }
+    const searchable = candidate => norm([
+      text(candidate), candidate.getAttribute('title'), candidate.getAttribute('aria-label'),
+      ...[...candidate.attributes].filter(attribute => attribute.name.startsWith('data-'))
+        .map(attribute => attribute.value),
+    ].filter(Boolean).join(' '));
+    const addressMatches = list.filter(candidate => wantedAddresses.some(address => {
+      const value = searchable(candidate);
+      return value.includes(address) || address.includes(value);
+    }));
+    const named = wantedBuilding ? list.filter(candidate => {
+      const value = norm(text(candidate));
+      return value === wantedBuilding || value.includes(wantedBuilding) || wantedBuilding.includes(value);
+    }) : [];
+    const namedAndAddressed = named.filter(candidate => addressMatches.includes(candidate));
+    // 검색 결과 자체의 유일한 도로명/지번, 주소+건물명의 유일한 교집합,
+    // 유일한 건물명, 전체 유일 후보만 자동 선택한다. 여러 후보를 임의로 누르면
+    // 검증 시점에는 이미 잘못된 단지가 폼에 반영되므로 첫 후보 fallback은 금지한다.
+    const item = addressMatches.length === 1 ? addressMatches[0]
+      : namedAndAddressed.length === 1 ? namedAndAddressed[0]
+      : named.length === 1 ? named[0]
+      : list.length === 1 ? list[0]
+      : null;
+    if (!item) {
+      miss('address', major + ' 단지 후보 ' + list.length + '개 중 주소와 건물명으로 하나를 확정할 수 없습니다. 화면에서 직접 골라 주세요.');
+      return false;
+    }
+    press(item.querySelector('button, label, a') || item);
+    const picked = await waitUntil(() => {
+      const cell = addressCell();
+      const summary = cell && cell.querySelector('[class*=AddressList]');
+      return summary && ((wantedBuilding && norm(text(summary)).includes(wantedBuilding)) ||
+        wantedAddresses.some(address => norm(text(summary)).includes(address) ||
+          address.includes(norm(text(summary))))) ? summary : null;
+    }, 5000);
+    if (!picked) {
+      miss('address', '「' + data.buildingName + '」 단지를 눌렀지만 주소가 확정되지 않았습니다.');
+      return false;
+    }
+    ok();
+    afterAddressPicked();
+    return true;
   };
 
   try {
@@ -763,10 +854,14 @@ String dabangInjectionScript(String payload) =>
     await applyPropertyType();
 
     // ② 주소 — 검색어만 미리 넣고, 결과 선택은 마지막에 띄우는 카카오 화면에서 받는다.
-    const keyword = addressCell() && addressCell().querySelector('input[name="keyword"]');
-    if (filled(data.address) && keyword) {
-      setNative(keyword, data.address);
-      if (keyword.value === String(data.address)) output.applied++;
+    if (complexProperty) {
+      await enterComplexAddress(PROPERTY[data.propertyType][0]);
+    } else {
+      const keyword = addressCell() && addressCell().querySelector('input[name="keyword"]');
+      if (filled(data.address) && keyword) {
+        setNative(keyword, data.address);
+        if (keyword.value === String(data.address)) output.applied++;
+      }
     }
     afterAddressPicked();
 
@@ -814,7 +909,9 @@ String dabangInjectionScript(String payload) =>
       const cell = cellOf('trade_info', '가격 정보');
       return cell ? cell.querySelector('input[name="' + name + '"]') : null;
     };
-    await waitUntil(() => data.trade === '월세' ? price('price')() : price('deposit')(), 3000);
+    if (filled(data.trade)) {
+      await waitUntil(() => data.trade === '월세' ? price('price')() : price('deposit')(), 3000);
+    }
     if (data.trade === '매매') fill('salePrice', price('deposit'), data.salePrice);
     else {
       fill('deposit', price('deposit'), data.deposit);
@@ -896,7 +993,9 @@ String dabangInjectionScript(String payload) =>
     if (filled(data.parkingPerHousehold)) note('세대당 주차 대수: 다방은 총 주차 대수만 받습니다.');
 
     // ⑮ 복층
-    await choose('roomLayout.duplex', () => cellOf('additional_info', '복층 여부'), data.roomLayout === '복층형 원룸' ? '복층' : '단층');
+    if (filled(data.roomLayout)) {
+      await choose('roomLayout.duplex', () => cellOf('additional_info', '복층 여부'), data.roomLayout === '복층형 원룸' ? '복층' : '단층');
+    }
 
     // ⑯ 시설
     await choose('heating', () => cellOf('facility_info', '난방 시설'), data.heating);
@@ -934,7 +1033,7 @@ String dabangInjectionScript(String payload) =>
     for (const message of (window.__flrPostcode ? window.__flrPostcode.notes : [])) note(message);
 
     // ⑱ 마지막에 주소 검색 화면을 띄운다 — 전체 화면 겹이라 다른 입력을 가린다.
-    if (filled(data.address)) {
+    if (filled(data.address) && !complexProperty) {
       const cell = addressCell();
       const search = cell && [...cell.querySelectorAll('button')].find(button => norm(text(button)) === '검색');
       if (search) {
@@ -1602,20 +1701,19 @@ String addressPickerFrameScript(String target) =>
     document.addEventListener('DOMContentLoaded', () => setTimeout(pick), {once: true});
     return;
   }
-  if (window.__flrPickerRan) return;
-  window.__flrPickerRan = true;
-
-  const target = $target;
-  if (!target) return;
+  const targetInput = $target;
+  const targets = (Array.isArray(targetInput) ? targetInput : [targetInput])
+    .map(value => String(value || '').trim()).filter(Boolean);
+  if (!targets.length) return;
+  if (window.__flrPickerRan || window.__flrPickerRunning) return;
+  window.__flrPickerRunning = true;
   // Only the search this app started gets picked for the user. If they clear the
   // box and look for somewhere else, that is their choice to make.
-  const query = (document.getElementById('cQuery') || {}).value ||
+  const clean = value => String(value === undefined || value === null ? '' : value)
+    .replace(/\\(.*?\\)/g, ' ').replace(/\\s+/g, ' ').trim();
+  const squash = value => clean(value).replace(/\\s+/g, '');
+  const query = () => (document.getElementById('cQuery') || {}).value ||
     new URLSearchParams(location.search).get('cq') || '';
-  const squash = value => String(value === undefined || value === null ? '' : value).replace(/\\s+/g, '');
-  if (squash(query) !== squash(target)) return;
-  try {
-    if (sessionStorage.getItem('flrPicked') === '1') return;
-  } catch (_) { /* private mode: fall through and pick once per frame load */ }
 
   // 시·도 이름은 카카오가 「서울」로 줄여 쓰기도 하고 「서울특별시」로 다 쓰기도 한다.
   const SIDO = [
@@ -1626,38 +1724,52 @@ String addressPickerFrameScript(String target) =>
     ['경상북도', '경북'], ['경상남도', '경남'], ['제주특별자치도', '제주'], ['제주도', '제주'],
   ];
   const normalize = value => {
-    let text = squash(value);
+    let text = clean(value);
     for (const [full, short] of SIDO) {
       if (text.startsWith(full)) { text = short + text.slice(full.length); break; }
       if (text.startsWith(short)) break;
     }
-    // 건물 이름은 통합 폼 주소에 없을 때가 많다 — 점수에서 뺀다.
-    return text.replace(/\\(.*?\\)/g, '');
+    return text.replace(/\\s+/g, ' ').trim();
   };
 
-  const wanted = normalize(target);
+  const wanted = targets.map(normalize);
   // 번지·건물번호는 「123」과 「123-4」를 가르는 결정적인 부분이라 따로 본다.
   const numbersOf = text => (text.match(/\\d+(-\\d+)?/g) || []);
-  const wantedNumbers = numbersOf(wanted);
+  const tokensOf = text => normalize(text).split(/\\s+/).filter(Boolean);
+  const houseNumber = text => numbersOf(normalize(text)).slice(-1)[0] || '';
+  const localityTokens = text => tokensOf(text).filter(token =>
+    /(?:시|도|군|구)\$/.test(token));
+  const placeTokens = text => tokensOf(text).filter(token =>
+    /(?:읍|면|동|리|가|로|길)\$/.test(token));
+  const intersects = (left, right) => left.some(token => right.includes(token));
+
+  const matchesAddress = (candidate, expected) => {
+    const value = normalize(candidate);
+    if (!value || !expected) return false;
+    if (squash(value) === squash(expected)) return true;
+    const expectedHouse = houseNumber(expected);
+    if (!expectedHouse || houseNumber(value) !== expectedHouse) return false;
+    const expectedPlaces = placeTokens(expected);
+    const candidatePlaces = placeTokens(value);
+    // 같은 구와 번지만으로는 부족하다. 이전 검색의 다른 도로도 그 조건을
+    // 만족할 수 있으므로 도로명 또는 법정동이 반드시 겹쳐야 한다.
+    if (!expectedPlaces.length || !intersects(expectedPlaces, candidatePlaces)) return false;
+    const expectedLocalities = localityTokens(expected);
+    return !expectedLocalities.length || intersects(expectedLocalities, localityTokens(value));
+  };
 
   const score = candidate => {
     const value = normalize(candidate);
     if (!value) return -1;
-    if (value === wanted) return 1000;
-    let points = 0;
-    // 앞에서부터 같은 길이 — 시/도 → 구 → 도로명 순으로 겹칠수록 높다.
-    let prefix = 0;
-    while (prefix < value.length && prefix < wanted.length && value[prefix] === wanted[prefix]) prefix++;
-    points += prefix * 4;
-    const values = numbersOf(value);
-    for (const number of wantedNumbers) {
-      if (values.includes(number)) points += 60;
-      else if (values.some(other => other.split('-')[0] === number.split('-')[0])) points += 20;
+    let winner = -1;
+    for (const expected of wanted) {
+      if (squash(value) === squash(expected)) return 1000;
+      if (!matchesAddress(value, expected)) continue;
+      const sharedPlaces = placeTokens(expected).filter(token => placeTokens(value).includes(token)).length;
+      const sharedLocalities = localityTokens(expected).filter(token => localityTokens(value).includes(token)).length;
+      winner = Math.max(winner, 100 + sharedPlaces * 40 + sharedLocalities * 10);
     }
-    // 찾는 주소에 없는 번지가 후보에 더 붙어 있으면(123 → 123-4) 그만큼 뺀다.
-    points -= Math.max(0, values.length - wantedNumbers.length) * 15;
-    if (value.includes(wanted) || wanted.includes(value)) points += 40;
-    return points;
+    return winner;
   };
 
   const press = el => {
@@ -1686,6 +1798,10 @@ String addressPickerFrameScript(String target) =>
     return winner && winner.item;
   };
 
+  const stronglyMatches = item => {
+    return !!item && wanted.some(expected => matchesAddress(item.address, expected));
+  };
+
   const waitFor = (predicate, timeout) => new Promise(resolve => {
     const until = Date.now() + timeout;
     const tick = () => {
@@ -1698,15 +1814,30 @@ String addressPickerFrameScript(String target) =>
   });
 
   (async () => {
+    // 다방에서는 iframe 의 documentEnd 뒤에 검색어를 채우고, 그보다 더 늦게
+    // 결과 목록을 그리기도 한다. 둘 다 한 deadline 안에서 기다려야 한다.
+    const deadline = Date.now() + 12000;
+    const ours = await waitFor(() => {
+      const value = query();
+      if (!value) return null;
+      return targets.some(expected => squash(value) === squash(expected)) ? value : null;
+    }, Math.max(0, deadline - Date.now()));
+    if (!ours) return;
+    try {
+      if (sessionStorage.getItem('flrPicked') === '1') return;
+    } catch (_) { /* private mode: the in-memory flags still prevent duplicates */ }
+
     // 첫 화면: 우편번호 묶음마다 도로명·지번 후보가 붙어 있다.
     const first = await waitFor(() => {
       const items = candidates();
-      return items.length ? items : null;
-    }, 8000);
+      const pick = best(items);
+      return stronglyMatches(pick) ? {items, pick} : null;
+    }, Math.max(0, deadline - Date.now()));
     if (!first) return;
-    const pick = best(first);
+    const pick = first.pick;
     if (!pick) return;
-    try { sessionStorage.setItem('flrPicked', '1'); } catch (_) { /* ignore */ }
+    // 완료 표시는 실제 후보를 찾은 뒤, 클릭 직전에만 세운다. 늦은 검색어/후보로
+    // 빈 실행이 끝난 경우에는 다음 주입이 다시 시도할 수 있어야 한다.
     press(pick.button);
 
     // 도로명 하나에 지번이 여럿이면 카카오가 지번 고르는 화면을 한 번 더 띄운다.
@@ -1716,10 +1847,17 @@ String addressPickerFrameScript(String target) =>
       const items = candidates().filter(item => list.contains(item.span));
       return items.length ? items : null;
     }, 2500);
-    if (!second) return;
+    if (!second) {
+      window.__flrPickerRan = true;
+      return;
+    }
     const follow = best(second);
     // 어느 지번인지 가릴 근거가 없으면 카카오가 준 첫 줄을 쓴다.
+    // 첫 클릭 전에 완료를 저장하면 2단계 화면이 새 문서로 열릴 때 그 문서가
+    // 즉시 종료된다. 실제 마지막 선택 직전에만 완료 상태를 남긴다.
+    window.__flrPickerRan = true;
+    try { sessionStorage.setItem('flrPicked', '1'); } catch (_) { /* ignore */ }
     press((follow || second[0]).button);
-  })();
+  })().finally(() => { window.__flrPickerRunning = false; });
 })();
 ''';

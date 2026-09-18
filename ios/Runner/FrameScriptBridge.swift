@@ -20,12 +20,14 @@ final class FrameScriptBridge: NSObject {
 
   private static let channelName = "jikbang/frame_script"
 
-  /// Content controllers seen so far, newest last. Held weakly: a controller
-  /// dies with the web view that owns it.
-  private let seen = NSHashTable<WKUserContentController>.weakObjects()
-  /// Controllers that already carry the frame script, so reopening a mirror
-  /// does not stack duplicates on a controller that is still alive.
-  private let installed = NSHashTable<WKUserContentController>.weakObjects()
+  /// Maps the unique no-op JavaScript channel created by each MirrorPage to
+  /// that page's exact content controller. Values are weak so this registry
+  /// never extends a WebView's lifetime.
+  private let targets = NSMapTable<NSString, WKUserContentController>(
+    keyOptions: .strongMemory,
+    valueOptions: .weakMemory
+  )
+  private var installedTargets = Set<String>()
 
   /// Swaps `addScriptMessageHandler:name:` for our version. Called once, before
   /// any web view exists.
@@ -40,32 +42,38 @@ final class FrameScriptBridge: NSObject {
         result(FlutterMethodNotImplemented)
         return
       }
-      guard let source = call.arguments as? String else {
+      guard
+        let arguments = call.arguments as? [String: Any],
+        let source = arguments["script"] as? String,
+        let targetChannel = arguments["targetChannel"] as? String
+      else {
         result(
           FlutterError(
             code: "bad-arguments",
-            message: "setFrameScript expects the script source as a String.",
+            message: "setFrameScript expects script and targetChannel.",
             details: nil
           )
         )
         return
       }
-      result(shared.install(source: source))
+      result(shared.install(source: source, targetChannel: targetChannel))
     }
   }
 
-  fileprivate func remember(_ controller: WKUserContentController) {
-    seen.add(controller)
+  fileprivate func remember(_ controller: WKUserContentController, channel: String) {
+    guard channel.hasPrefix("FrameScriptTarget_") else { return }
+    targets.setObject(controller, forKey: channel as NSString)
   }
 
-  /// Adds `source` to the newest content controller that has not got it yet.
-  /// Returns whether a controller was available to take it, so the Dart side
+  /// Adds `source` to the exact content controller identified by the Dart
+  /// page's unique channel. Returns whether that controller was available, so the Dart side
   /// can say plainly that automatic selection is off rather than silently
   /// waiting for a click that never comes.
-  private func install(source: String) -> Bool {
-    guard let controller = seen.allObjects.last(where: { !installed.contains($0) }) else {
+  private func install(source: String, targetChannel: String) -> Bool {
+    guard let controller = targets.object(forKey: targetChannel as NSString) else {
       return false
     }
+    if installedTargets.contains(targetChannel) { return true }
     controller.addUserScript(
       WKUserScript(
         source: source,
@@ -73,7 +81,7 @@ final class FrameScriptBridge: NSObject {
         forMainFrameOnly: false
       )
     )
-    installed.add(controller)
+    installedTargets.insert(targetChannel)
     return true
   }
 }
@@ -94,7 +102,7 @@ extension WKUserContentController {
   /// After the exchange this body runs in place of `add(_:name:)`, and the call
   /// to `flr_add` below reaches the original implementation.
   @objc dynamic func flr_add(_ scriptMessageHandler: WKScriptMessageHandler, name: String) {
-    FrameScriptBridge.shared.remember(self)
+    FrameScriptBridge.shared.remember(self, channel: name)
     flr_add(scriptMessageHandler, name: name)
   }
 }

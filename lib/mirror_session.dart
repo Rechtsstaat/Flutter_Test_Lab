@@ -34,7 +34,10 @@ class MirrorPage extends ChangeNotifier {
   }) : initialUrl = url {
     controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..addJavaScriptChannel(_pressChannel, onMessageReceived: _pressed);
+      ..addJavaScriptChannel(_pressChannel, onMessageReceived: _pressed)
+      // iOS uses this otherwise-unused channel as an exact, per-WebView
+      // rendezvous point for the native all-frame script bridge.
+      ..addJavaScriptChannel(_frameTargetChannel, onMessageReceived: (_) {});
     configure(controller);
     controller.setNavigationDelegate(
       NavigationDelegate(
@@ -76,6 +79,9 @@ class MirrorPage extends ChangeNotifier {
   }
 
   static const _pressChannel = 'MirrorPress';
+  static int _nextFrameTarget = 0;
+
+  final String _frameTargetChannel = 'FrameScriptTarget_${_nextFrameTarget++}';
 
   final ListingPlatform platform;
   final Uri initialUrl;
@@ -285,7 +291,11 @@ class MirrorSession extends MirrorPage {
     final address = '${values['address'] ?? ''}';
     final kakao = platform.usesKakaoPostcode;
     picksAddress = kakao && address.isNotEmpty
-        ? await _installFramePicker(address)
+        ? await _installFramePicker([
+            address,
+            '${values['roadAddress'] ?? ''}',
+            '${values['jibunAddress'] ?? ''}',
+          ])
         : false;
     try {
       // The bridge has to be in place before the adapter presses anything that
@@ -342,18 +352,22 @@ class MirrorSession extends MirrorPage {
   /// The user script has to be registered before the Kakao frame loads, which
   /// is why this runs with the rest of the injection rather than when the
   /// address search opens.
-  Future<bool> _installFramePicker(String address) async {
-    final script = addressPickerFrameScript(jsonEncode(address));
+  Future<bool> _installFramePicker(List<String> addresses) async {
+    final alternatives = addresses
+        .where((value) => value.trim().isNotEmpty)
+        .toSet()
+        .toList();
+    final script = addressPickerFrameScript(jsonEncode(alternatives));
     final native = controller.platform;
-    // iOS finds the newest web view on its own. Android has to be told which
-    // one, and only lets the script into the Kakao origins.
+    // Android identifies its WebView directly. iOS maps the unique JS channel
+    // registered above back to the exact WKUserContentController.
     final Object arguments = native is AndroidWebViewController
         ? {
             'script': script,
             'webView': native.webViewIdentifier,
             'origins': kakaoPostcodeOrigins,
           }
-        : script;
+        : {'script': script, 'targetChannel': _frameTargetChannel};
     try {
       final installed = await _frameScripts.invokeMethod<bool>(
         'setFrameScript',
