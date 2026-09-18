@@ -12,8 +12,8 @@ enum _Stage { select, login, done }
 /// 001 플랫폼 연동 선택 → 0011 플랫폼 연동-웹뷰 (one per platform) → 002 완료.
 ///
 /// 한방 keeps the chrome — the step bar and the order of platforms — while each
-/// platform's own login page runs in the sheet underneath. The app never sees
-/// what is typed there; it only hears that the platform let the agent in.
+/// platform's own login page runs in the sheet underneath. 앱은 거기에 무엇을 넣는지
+/// 보지 않고, **세션이 생겼는지만** 확인한다 ([MirrorLogin]).
 class OnboardingFlow extends StatefulWidget {
   const OnboardingFlow({super.key, required this.store});
 
@@ -252,7 +252,10 @@ class _LoginStep extends StatelessWidget {
                     onSkip: onSkip,
                   )
                 else if (login.linked)
-                  _LinkedBadge(platform: login.platform),
+                  _LinkedBadge(
+                    platform: login.platform,
+                    evidence: login.evidence,
+                  ),
               ],
             ),
           ),
@@ -264,9 +267,12 @@ class _LoginStep extends StatelessWidget {
 
 /// The beat between a platform letting the agent in and the next login.
 class _LinkedBadge extends StatelessWidget {
-  const _LinkedBadge({required this.platform});
+  const _LinkedBadge({required this.platform, required this.evidence});
 
   final ListingPlatform platform;
+
+  /// 무엇을 보고 연결로 판단했는지. 플랫폼마다 다른 자리를 보므로 화면에도 적어 준다.
+  final SessionEvidence evidence;
 
   @override
   Widget build(BuildContext context) => Align(
@@ -276,7 +282,10 @@ class _LinkedBadge extends StatelessWidget {
       child: SafeArea(
         top: false,
         child: FadeSlideIn(
-          child: GuideToast(title: '${platform.label} 연결을 확인했어요'),
+          child: GuideToast(
+            title: '${platform.label} 연결을 확인했어요',
+            detail: evidence == SessionEvidence.none ? null : evidence.label,
+          ),
         ),
       ),
     ),

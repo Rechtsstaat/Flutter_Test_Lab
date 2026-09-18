@@ -2,6 +2,20 @@ import 'photo_transfer.dart';
 
 enum ListingPlatform { zigbang, dabang, daangn }
 
+/// 「지금 로그인돼 있나」를 확인하는 방법. **플랫폼마다 다르다** — 쿠키를 심는 쪽이 다르기
+/// 때문이다(미러 실측 2026-09-18).
+enum SessionCheck {
+  /// 쿠키가 JS 에 보인다. 직방 `ceo_zauth` 는 **페이지가** 심고 HttpOnly 가 아니다.
+  cookieVisible,
+
+  /// 플랫폼에 직접 물어야 한다. 다방 `auth_key` 는 서버가 심고 **HttpOnly** 라
+  /// `document.cookie` 에 아예 안 보인다 — 앱이 쿠키를 들여다보는 길이 없다.
+  platformAsks,
+
+  /// 로그인이 없는 플랫폼 (당근 미러).
+  none,
+}
+
 extension ListingPlatformConfig on ListingPlatform {
   String get label => switch (this) {
     ListingPlatform.zigbang => '직방',
@@ -19,8 +33,8 @@ extension ListingPlatformConfig on ListingPlatform {
   };
 
   /// The page a signed-in agent lands on (직방 CEO 대시보드, 다방프로 대시보드,
-  /// 당근부동산 중개소 홈). The mirror starts after login, so the 0011 login
-  /// stand-in hands over to this page.
+  /// 당근부동산 중개소 홈). 로그인이 안 돼 있으면 **플랫폼이** 이 주소를 로그인 화면으로
+  /// 되돌려 보낸다 — 그래서 0011 연동은 이 주소만 열면 된다.
   String get dashboardUrl => switch (this) {
     ListingPlatform.zigbang =>
       'https://mirror-dimension-lab.pages.dev/zigbang/',
@@ -52,6 +66,44 @@ extension ListingPlatformConfig on ListingPlatform {
     ListingPlatform.zigbang => const ['매물 종료하기', '매물 종료'],
     ListingPlatform.dabang => const ['광고 종료', '거래 완료'],
     ListingPlatform.daangn => const ['거래완료', '미노출'],
+  };
+
+  /// 로그인 화면이 있는 플랫폼인가. 당근은 실물 로그인을 아직 수집하지 못했다.
+  bool get hasLogin => this != ListingPlatform.daangn;
+
+  /// 로그인 안 된 요청이 튕겨 가는 곳. 실물과 같은 자리다 — 직방은 랜딩(`/intro`)으로,
+  /// 다방은 로그인 화면으로 보낸다.
+  List<String> get signedOutPaths => switch (this) {
+    ListingPlatform.zigbang => const [
+      '/zigbang/intro',
+      '/zigbang/account/login',
+    ],
+    ListingPlatform.dabang => const ['/dabang/login'],
+    ListingPlatform.daangn => const [],
+  };
+
+  /// 지금 보고 있는 주소가 「로그인하라」는 화면인가.
+  bool isSignedOut(Uri url) =>
+      signedOutPaths.any((path) => url.path.startsWith(path));
+
+  /// 세션 쿠키 이름 (실측). 다방 것은 HttpOnly 라 JS 에서는 보이지 않는다.
+  String get sessionCookie => switch (this) {
+    ListingPlatform.zigbang => 'ceo_zauth',
+    ListingPlatform.dabang => 'auth_key',
+    ListingPlatform.daangn => '',
+  };
+
+  SessionCheck get sessionCheck => switch (this) {
+    ListingPlatform.zigbang => SessionCheck.cookieVisible,
+    ListingPlatform.dabang => SessionCheck.platformAsks,
+    ListingPlatform.daangn => SessionCheck.none,
+  };
+
+  /// 플랫폼에게 「로그인돼 있나」를 묻는 주소 (실물 경로 그대로). 답은 **코드가 아니라
+  /// 본문**으로 온다 — 로그인 전에도 200 이다(미러가 실물을 그대로 따른다).
+  String get sessionCheckPath => switch (this) {
+    ListingPlatform.dabang => '/dabang/api/v2/user/login/check',
+    _ => '',
   };
 
   /// The mirror whose own upload handler takes the selected photos, if any.
@@ -750,3 +802,4 @@ String? roomLayoutFrom({String? structure, String? duplex}) {
   if (structure == null) return null;
   return '$structure 원룸';
 }
+

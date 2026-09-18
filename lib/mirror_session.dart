@@ -9,7 +9,6 @@ import 'package:webview_flutter_android/webview_flutter_android.dart'
     show AndroidWebViewController;
 
 import 'android_layout.dart';
-import 'design/tokens.dart';
 import 'fields.dart';
 import 'photo_transfer.dart';
 import 'remote_form.dart';
@@ -30,7 +29,6 @@ class MirrorPage extends ChangeNotifier {
     required Uri url,
     this.watchLabels = const [],
     this.loadTimeout,
-    String? html,
   }) : initialUrl = url {
     controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -65,11 +63,7 @@ class MirrorPage extends ChangeNotifier {
         onPageFinished: _pageFinished,
       ),
     );
-    if (html != null) {
-      controller.loadHtmlString(html, baseUrl: url.toString());
-    } else {
-      controller.loadRequest(url);
-    }
+    controller.loadRequest(url);
     final timeout = loadTimeout;
     if (timeout != null) {
       _timeout = Timer(timeout, () {
@@ -105,6 +99,13 @@ class MirrorPage extends ChangeNotifier {
   @protected
   void configure(WebViewController controller) {}
 
+  /// 플랫폼이 로그인 화면으로 되돌려 보냈을 때 그것을 실패로 볼 것인가.
+  ///
+  /// 등록·종료 화면에서 그런 일이 벌어졌다면 **로그인이 풀린 것**이라 거기서 할 수 있는
+  /// 일이 없다. 연동 화면([MirrorLogin])만 거기가 목적지라 아니라고 답한다.
+  @protected
+  bool get leavesOnSignedOut => true;
+
   /// Called for every finished main-frame load after the press watcher is in.
   @protected
   Future<void> onPage(Uri url) async => markLoaded();
@@ -123,6 +124,10 @@ class MirrorPage extends ChangeNotifier {
     }
     final uri = Uri.tryParse(url);
     if (uri == null || _disposed) return;
+    if (leavesOnSignedOut && platform.isSignedOut(uri)) {
+      fail('${platform.label} 로그인이 풀렸어요. 플랫폼 연동을 다시 해주세요.');
+      return;
+    }
     await onPage(uri);
   }
 
@@ -383,34 +388,130 @@ class MirrorSession extends MirrorPage {
   }
 }
 
-/// 0011's platform login. The mirror starts after login, so the WebView shows
-/// a stand-in login page first and then the platform's signed-in dashboard.
-/// 한방 never reads what is typed: the page clears its fields before leaving
-/// and only reports that a login was submitted.
+/// 0011 플랫폼 연동 — **플랫폼 자신의 로그인 화면**에서 로그인하게 한다.
+///
+/// 앱은 로그인 화면을 따로 부르지 않고 **대시보드 주소만 연다.** 로그인이 안 돼 있으면
+/// 플랫폼이 알아서 로그인 화면으로 되돌려 보내고(직방은 랜딩 `/intro`, 다방은 `/login`),
+/// 이미 돼 있으면 로그인 화면 없이 바로 대시보드가 뜬다 — 실물이 그렇게 움직인다.
+///
+/// 한방은 아이디도 비밀번호도 보지 않는다. 사람이 플랫폼 화면에 직접 넣고, 앱은
+/// **세션이 생겼는지만** 확인한다. 그 확인법이 플랫폼마다 다르다 (미러 실측):
+///
+/// | 플랫폼 | 열쇠 | 확인법 |
+/// |---|---|---|
+/// | 직방 | `ceo_zauth` — **페이지가** 심고 HttpOnly 아님 | `document.cookie` 로 보인다 |
+/// | 다방 | `auth_key` — 서버가 심고 **HttpOnly** | 안 보인다. 플랫폼에 `login/check` 로 묻는다 |
+/// | 당근 | 없음 (수집 없음) | 화면이 뜨면 연결로 본다 |
 class MirrorLogin extends MirrorPage {
   MirrorLogin({required super.platform})
-    : super(
-        url: Uri.parse(platform.dashboardUrl),
-        html: loginStandInHtml(platform),
-      );
+    : super(url: Uri.parse(platform.dashboardUrl));
 
-  bool submitted = false;
-  bool get linked => submitted && loaded;
+  /// 세션이 실제로 있는가. 「제출했다」가 아니라 **플랫폼이 인정했는가**다.
+  bool linked = false;
+
+  /// 무엇을 보고 그렇게 판단했는지 (화면에 적어 주고, 나중에 원인을 찾을 때 쓴다).
+  SessionEvidence evidence = SessionEvidence.none;
+
+  /// 지금 보고 있는 것이 로그인 화면인가 (대시보드가 아니라).
+  bool onLoginScreen = false;
+
+  /// 여기서는 로그인 화면이 목적지다 — 튕겨 온 것을 실패로 보지 않는다.
+  @override
+  bool get leavesOnSignedOut => false;
 
   @override
   void configure(WebViewController controller) {
-    controller.addJavaScriptChannel(
-      'LoginBridge',
-      onMessageReceived: (_) {
-        submitted = true;
-        notifyListeners();
-      },
-    );
+    controller.addJavaScriptChannel('SessionProbe', onMessageReceived: _probed);
   }
 
   @override
   Future<void> onPage(Uri url) async {
-    if (submitted && url.host == initialUrl.host) markLoaded();
+    markLoaded();
+    onLoginScreen = platform.isSignedOut(url);
+    if (!platform.hasLogin) {
+      // 로그인이 없는 플랫폼은 화면이 떴다는 것 말고 볼 것이 없다.
+      _settle(true, SessionEvidence.page);
+      return;
+    }
+    notifyListeners();
+    try {
+      await controller.runJavaScript(sessionProbeScript(platform));
+    } catch (_) {
+      _settle(!onLoginScreen, SessionEvidence.page);
+    }
+  }
+
+  void _probed(JavaScriptMessage message) {
+    switch (message.message) {
+      case 'true':
+        _settle(
+          true,
+          platform.sessionCheck == SessionCheck.cookieVisible
+              ? SessionEvidence.cookie
+              : SessionEvidence.platform,
+        );
+      case 'false':
+        _settle(false, SessionEvidence.none);
+      default:
+        // 물어보지 못했다(문지기·네트워크). 그러면 **화면**으로 판단한다 —
+        // 플랫폼이 로그인 화면으로 되돌려 보내지 않았다는 것 자체가 신호다.
+        _settle(!onLoginScreen, SessionEvidence.page);
+    }
+  }
+
+  void _settle(bool value, SessionEvidence how) {
+    final next = value ? how : SessionEvidence.none;
+    if (linked == value && evidence == next) return;
+    linked = value;
+    evidence = next;
+    notifyListeners();
+  }
+}
+
+/// 무엇을 보고 「연결됐다」고 판단했는가.
+enum SessionEvidence {
+  /// 쿠키가 JS 에 그대로 보였다 (직방).
+  cookie,
+
+  /// 플랫폼이 물음에 그렇다고 답했다 (다방 `login/check`).
+  platform,
+
+  /// 로그인 화면으로 되돌려 보내지 않았다 — 화면으로만 판단했다.
+  page,
+
+  none;
+
+  String get label => switch (this) {
+    SessionEvidence.cookie => '쿠키 확인',
+    SessionEvidence.platform => '플랫폼이 확인',
+    SessionEvidence.page => '화면으로 확인',
+    SessionEvidence.none => '',
+  };
+}
+
+/// 페이지 안에서 「지금 로그인돼 있나」를 확인하고 `SessionProbe` 로 답하는 스크립트.
+/// 답은 `'true'` · `'false'` · 그 밖(못 물어봤다) 셋 중 하나다.
+String sessionProbeScript(ListingPlatform platform) {
+  const open = '(() => { try {';
+  const close = '} catch (_) {} })();';
+  switch (platform.sessionCheck) {
+    // 직방: 페이지 JS 가 심은 쿠키라 document.cookie 에 그대로 있다.
+    case SessionCheck.cookieVisible:
+      final name = jsonEncode('${platform.sessionCookie}=');
+      return '$open window.SessionProbe.postMessage(String('
+          'document.cookie.split("; ").some(c => c.startsWith($name))));$close';
+    // 다방: auth_key 가 HttpOnly 라 JS 로는 볼 수 없다. 플랫폼에 직접 묻는 수밖에 없고,
+    // 답은 **코드가 아니라 본문**에 있다 — 로그인 전에도 200 이 온다.
+    case SessionCheck.platformAsks:
+      final ask = jsonEncode(platform.sessionCheckPath);
+      return '(() => {\n'
+          "  fetch($ask, {credentials: 'same-origin', headers: {accept: 'application/json'}})\n"
+          '    .then(response => response.ok ? response.json() : Promise.reject(response.status))\n'
+          '    .then(body => { window.SessionProbe.postMessage(String(!!body.isLogin)); })\n'
+          "    .catch(() => { try { window.SessionProbe.postMessage('unknown'); } catch (_) {} });\n"
+          '})();';
+    case SessionCheck.none:
+      return "$open window.SessionProbe.postMessage('unknown');$close";
   }
 }
 
@@ -455,60 +556,6 @@ String pressWatcherScript(List<String> labels) =>
   }, true);
 })();
 ''';
-
-/// A neutral login page standing in for the platform's own. It posts nothing
-/// anywhere: the fields are wiped before it moves on.
-String loginStandInHtml(ListingPlatform platform) {
-  final name = const HtmlEscape().convert(platform.label);
-  final color =
-      '#${(platform.color.toARGB32() & 0xffffff).toRadixString(16).padLeft(6, '0')}';
-  return '''
-<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>$name 로그인</title>
-<style>
-  * { box-sizing: border-box; }
-  /* The simulator's WebKit does not fall back to a Hangul face from
-     -apple-system, so name one first. */
-  body { margin: 0; padding: 40px 24px; font: 15px/1.5 "Apple SD Gothic Neo", -apple-system, BlinkMacSystemFont, "Noto Sans KR", sans-serif; color: #20232b; background: #fff; }
-  input, button { font-family: inherit; }
-  .mark { width: 48px; height: 48px; border-radius: 12px; background: $color; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; }
-  h1 { font-size: 22px; margin: 20px 0 4px; }
-  p { margin: 0 0 24px; color: #626a78; font-size: 13px; }
-  label { display: block; font-size: 13px; font-weight: 600; margin: 16px 0 6px; color: #4d5360; }
-  input { width: 100%; height: 48px; border: 1px solid #d2d6de; border-radius: 10px; padding: 0 14px; font-size: 15px; }
-  input:focus { outline: none; border-color: $color; }
-  button { width: 100%; height: 50px; margin-top: 28px; border: 0; border-radius: 10px; background: $color; color: #fff; font-size: 16px; font-weight: 600; }
-  .note { margin-top: 20px; padding: 12px 14px; border-radius: 10px; background: #f2f4f7; color: #626a78; font-size: 12px; }
-</style>
-</head>
-<body>
-  <div class="mark">$name</div>
-  <h1>$name 중개사 로그인</h1>
-  <p>로그인하면 한방이 이 계정으로 광고를 올릴 수 있어요.</p>
-  <form id="login" autocomplete="off">
-    <label for="id">아이디</label>
-    <input id="id" name="id" autocomplete="off" autocapitalize="off" placeholder="아이디 입력">
-    <label for="pw">비밀번호</label>
-    <input id="pw" name="pw" type="password" autocomplete="off" placeholder="비밀번호 입력">
-    <button type="submit">로그인</button>
-  </form>
-  <div class="note">미러 환경의 임시 로그인 화면입니다. 실제 계정 정보를 입력하지 마세요. 입력한 값은 어디에도 보내지 않습니다.</div>
-<script>
-  document.getElementById('login').addEventListener('submit', event => {
-    event.preventDefault();
-    for (const input of event.target.querySelectorAll('input')) input.value = '';
-    try { window.LoginBridge.postMessage('submitted'); } catch (_) {}
-    setTimeout(() => { location.href = ${jsonEncode(platform.dashboardUrl)}; }, 300);
-  });
-</script>
-</body>
-</html>
-''';
-}
 
 /// The WebView for a [MirrorPage], sized by its parent.
 class MirrorWebView extends StatelessWidget {
