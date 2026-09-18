@@ -7,9 +7,11 @@ import '../data/app_store.dart';
 import '../design/components.dart';
 import '../design/tokens.dart';
 import '../fields.dart';
+import '../mirror_session.dart';
 import '../models/listing.dart';
 import 'listing_detail_page.dart';
 import 'listing_form_page.dart';
+import 'onboarding_flow.dart';
 
 /// 101 홈 — manage every listing's state and start a new one.
 class HomePage extends StatefulWidget {
@@ -48,6 +50,61 @@ class _HomePageState extends State<HomePage> {
     ),
   );
 
+  /// 로그아웃 — 연동 상태(앱)와 플랫폼 로그인(웹뷰) 둘 다 지워야 다음 연동이
+  /// 진짜 처음부터 돈다. 하나만 지우면 0011 을 지나면서도 플랫폼은 이미
+  /// 로그인된 화면을 띄워, 로그인 갈래를 시험할 수가 없다.
+  Future<void> _signOut() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColor.bgSurface,
+        title: const Text('로그아웃할까요?', style: AppText.title),
+        content: const Text(
+          '연결한 플랫폼이 모두 해제되고, 웹뷰에 남은 로그인도 지워져요.\n'
+          '등록한 매물 기록은 그대로 남아요.',
+          style: AppText.bodySmall,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: AppColor.statusError),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('로그아웃'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    // 쿠키를 못 지워도 연동 해제는 한다 — 로그아웃이 반쯤 되다 마는 것이 제일
+    // 나쁘다. 대신 다음 로그인이 건너뛰어질 수 있다고 말해 준다.
+    String? failure;
+    try {
+      await clearPlatformSessions();
+    } catch (error) {
+      failure = '$error';
+    }
+    await widget.store.signOut();
+    if (!mounted) return;
+    if (failure != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('웹뷰에 남은 로그인을 지우지 못했어요 ($failure)')),
+      );
+    }
+    Navigator.of(context).pushAndRemoveUntil(
+      PageRouteBuilder<void>(
+        transitionDuration: Motion.base,
+        pageBuilder: (_, _, _) => OnboardingFlow(store: widget.store),
+        transitionsBuilder: (_, animation, _, child) =>
+            FadeTransition(opacity: animation, child: child),
+      ),
+      (route) => false,
+    );
+  }
+
   void _open(Listing listing) => Navigator.of(context).push(
     MaterialPageRoute<void>(
       builder: (_) =>
@@ -77,11 +134,13 @@ class _HomePageState extends State<HomePage> {
               ) +
               androidBottomInset(context),
           children: [
-            const Row(
+            Row(
               children: [
-                HanbangLogo(size: 24),
-                SizedBox(width: Space.s8),
-                Text('한방', style: AppText.bodyStrong),
+                const HanbangLogo(size: 24),
+                const SizedBox(width: Space.s8),
+                const Text('한방', style: AppText.bodyStrong),
+                const Spacer(),
+                BarAction('로그아웃', onPressed: _signOut),
               ],
             ),
             const SizedBox(height: Space.s24),

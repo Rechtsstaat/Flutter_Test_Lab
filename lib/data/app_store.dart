@@ -112,6 +112,16 @@ class AppStore extends ChangeNotifier {
     await _persist();
   }
 
+  /// 로그아웃 — 0011 부터 다시 지날 수 있게 되돌린다. 매물 기록은 남긴다:
+  /// 지워지는 것은 「어느 플랫폼에 연결돼 있나」뿐이다. 플랫폼이 웹뷰에 심어 둔
+  /// 로그인은 여기서 못 지운다 — [clearPlatformSessions] 가 짝이다.
+  Future<void> signOut() async {
+    _linked.clear();
+    _onboarded = false;
+    notifyListeners();
+    await _persist();
+  }
+
   Future<void> save(Listing listing) async {
     final index = _listings.indexWhere((item) => item.id == listing.id);
     if (index == -1) {
