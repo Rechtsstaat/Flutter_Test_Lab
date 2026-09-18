@@ -70,8 +70,10 @@ class _ListingFormPageState extends State<ListingFormPage> {
     }
     final linked = widget.store?.linked ?? const <ListingPlatform>{};
     if (_channels.isEmpty) {
-      _channels.addAll(linked.isEmpty ? ListingPlatform.values : linked);
+      _channels.addAll(linked.isEmpty ? livePlatforms : linked);
     }
+    // 예전에 고른 것·연동해 둔 것 중에 잠시 내려 둔 플랫폼이 있으면 여기서 빠진다
+    _channels.removeWhere((platform) => !platform.isLive);
     // The hi-fi only asks for 주실 방향 and only offers a "주차 불가" box, so
     // the master rows behind them start from those readings.
     values.putIfAbsent('directionBase', () => '주실 기준');
@@ -415,7 +417,7 @@ class _ListingFormPageState extends State<ListingFormPage> {
           listing: _compose(),
           values: targetValues,
           photos: targetPhotos,
-          channels: ListingPlatform.values.where(_channels.contains).toList(),
+          channels: livePlatforms.where(_channels.contains).toList(),
           remotePageBuilder: widget.remotePageBuilder,
         ),
       ),
@@ -1097,6 +1099,8 @@ class _ListingFormPageState extends State<ListingFormPage> {
           child: SelectCard(
             platform: platform,
             selected: _channels.contains(platform),
+            enabled: platform.isLive,
+            note: platform.pausedNote,
             trailing: linked.contains(platform) ? '연동됨' : null,
             onTap: () => setState(() {
               if (!_channels.remove(platform)) _channels.add(platform);

@@ -146,8 +146,13 @@ class Listing {
     return buffer.toString();
   }
 
+  /// 지금 내릴 수 있는 광고. 잠시 내려 둔 플랫폼은 예전 기록에 남아 있어도 뺀다 —
+  /// 그 플랫폼으로는 종료 흐름을 돌릴 수 없기 때문이다.
   List<ListingPlatform> get liveChannels => channels.entries
-      .where((entry) => entry.value == ChannelState.published)
+      .where(
+        (entry) =>
+            entry.value == ChannelState.published && entry.key.isLive,
+      )
       .map((entry) => entry.key)
       .toList();
 

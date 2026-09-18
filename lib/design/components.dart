@@ -8,10 +8,13 @@ import 'tokens.dart';
 /// The small rounded square that names a platform in lists: its glyph in the
 /// platform colour over a 10% tint of the same colour.
 class PlatformIcon extends StatelessWidget {
-  const PlatformIcon(this.platform, {super.key, this.size = 36});
+  const PlatformIcon(this.platform, {super.key, this.size = 36, this.muted = false});
 
   final ListingPlatform platform;
   final double size;
+
+  /// 잠시 내려 둔 플랫폼은 제 색을 잃고 회색이 된다.
+  final bool muted;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -19,13 +22,13 @@ class PlatformIcon extends StatelessWidget {
     height: size,
     alignment: Alignment.center,
     decoration: BoxDecoration(
-      color: platform.tint,
+      color: muted ? AppColor.bgSubtle : platform.tint,
       borderRadius: BorderRadius.circular(size * 0.25),
     ),
     child: Text(
       platform.glyph,
       style: TextStyle(
-        color: platform.color,
+        color: muted ? AppColor.textDisabled : platform.color,
         fontSize: size * 0.38,
         fontWeight: FontWeight.w600,
         height: 1,
@@ -140,6 +143,8 @@ class SelectCard extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.trailing,
+    this.enabled = true,
+    this.note,
   });
 
   final ListingPlatform platform;
@@ -149,56 +154,98 @@ class SelectCard extends StatelessWidget {
   /// Shown before the check circle, e.g. "연동됨".
   final String? trailing;
 
+  /// 고를 수 있는가. 잠시 내려 둔 플랫폼은 회색으로 남되 눌리지 않는다.
+  final bool enabled;
+
+  /// 못 고르는 이유를 적는 회색 칩 ("준비 중").
+  final String? note;
+
   @override
-  Widget build(BuildContext context) => Semantics(
-    button: true,
-    selected: selected,
-    child: GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: Motion.quick,
-        curve: Motion.enter,
-        padding: const EdgeInsets.symmetric(
-          horizontal: Space.s16,
-          vertical: Space.s12,
-        ),
-        decoration: BoxDecoration(
-          color: selected ? AppColor.bgBrandSubtle : AppColor.bgSurface,
-          borderRadius: BorderRadius.circular(Radii.r12),
-          border: Border.all(
-            color: selected ? AppColor.borderFocus : AppColor.borderSubtle,
+  Widget build(BuildContext context) {
+    final on = enabled && selected;
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      selected: on,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        // 못 고르는 카드는 **아무 일도 하지 않는다.** 눌리는 척하지 않는 편이 정직하다
+        onTap: enabled ? onTap : null,
+        child: AnimatedContainer(
+          duration: Motion.quick,
+          curve: Motion.enter,
+          padding: const EdgeInsets.symmetric(
+            horizontal: Space.s16,
+            vertical: Space.s12,
+          ),
+          decoration: BoxDecoration(
+            color: !enabled
+                ? AppColor.bgSubtle
+                : on
+                ? AppColor.bgBrandSubtle
+                : AppColor.bgSurface,
+            borderRadius: BorderRadius.circular(Radii.r12),
+            border: Border.all(
+              color: on ? AppColor.borderFocus : AppColor.borderSubtle,
+            ),
+          ),
+          child: Row(
+            children: [
+              PlatformIcon(platform, size: 32, muted: !enabled),
+              const SizedBox(width: Space.s12),
+              Expanded(
+                child: Text(
+                  platform.label,
+                  style: AppText.body.copyWith(
+                    color: enabled ? AppColor.textPrimary : AppColor.textDisabled,
+                  ),
+                ),
+              ),
+              if (note != null) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: Space.s8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColor.bgSurface,
+                    borderRadius: BorderRadius.circular(Radii.r8),
+                    border: Border.all(color: AppColor.borderSubtle),
+                  ),
+                  child: Text(
+                    note!,
+                    style: AppText.caption.copyWith(color: AppColor.textDisabled),
+                  ),
+                ),
+                const SizedBox(width: Space.s8),
+              ] else if (trailing != null) ...[
+                Text(trailing!, style: AppText.caption),
+                const SizedBox(width: Space.s8),
+              ],
+              CheckCircle(checked: on, muted: !enabled),
+            ],
           ),
         ),
-        child: Row(
-          children: [
-            PlatformIcon(platform, size: 32),
-            const SizedBox(width: Space.s12),
-            Expanded(
-              child: Text(
-                platform.label,
-                style: AppText.body.copyWith(color: AppColor.textPrimary),
-              ),
-            ),
-            if (trailing != null) ...[
-              Text(trailing!, style: AppText.caption),
-              const SizedBox(width: Space.s8),
-            ],
-            CheckCircle(checked: selected),
-          ],
-        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// The round check the selection rows end on: filled brand when on, an empty
 /// ring when off.
 class CheckCircle extends StatelessWidget {
-  const CheckCircle({super.key, required this.checked, this.size = 22});
+  const CheckCircle({
+    super.key,
+    required this.checked,
+    this.size = 22,
+    this.muted = false,
+  });
 
   final bool checked;
   final double size;
+
+  /// 고를 수 없는 줄의 동그라미는 테두리까지 흐려진다.
+  final bool muted;
 
   @override
   Widget build(BuildContext context) => AnimatedContainer(
@@ -210,7 +257,10 @@ class CheckCircle extends StatelessWidget {
       color: checked ? AppColor.actionPrimary : AppColor.bgSurface,
       border: checked
           ? null
-          : Border.all(color: AppColor.borderDefault, width: 1.5),
+          : Border.all(
+              color: muted ? AppColor.borderSubtle : AppColor.borderDefault,
+              width: 1.5,
+            ),
     ),
     child: AnimatedScale(
       duration: Motion.quick,

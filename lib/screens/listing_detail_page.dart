@@ -69,7 +69,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
         builder: (_) => TakedownFlowPage(
           store: widget.store,
           listing: listing,
-          channels: ListingPlatform.values.where(picked.contains).toList(),
+          channels: livePlatforms.where(picked.contains).toList(),
         ),
       ),
     );
@@ -244,7 +244,8 @@ class _AdStateCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) => _Card(
     children: [
-      for (final platform in ListingPlatform.values)
+      // 잠시 내려 둔 플랫폼의 광고 상태는 보여 줄 것이 없다
+      for (final platform in livePlatforms)
         _AdStateRow(
           platform: platform,
           state: listing.channels[platform] ?? ChannelState.pending,

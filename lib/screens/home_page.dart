@@ -200,7 +200,7 @@ class _LinkedBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final names = ListingPlatform.values
+    final names = livePlatforms
         .where(linked.contains)
         .map((platform) => platform.label)
         .join('·');
@@ -264,10 +264,7 @@ class _FilterChips extends StatelessWidget {
   Widget build(BuildContext context) => Wrap(
     spacing: Space.s8,
     children: [
-      for (final platform in <ListingPlatform?>[
-        null,
-        ...ListingPlatform.values,
-      ])
+      for (final platform in <ListingPlatform?>[null, ...livePlatforms])
         _FilterChip(
           label: platform?.label ?? '전체',
           selected: selected == platform,
@@ -396,7 +393,7 @@ class PlatformStatusLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Row(
     children: [
-      for (final (index, platform) in ListingPlatform.values.indexed) ...[
+      for (final (index, platform) in livePlatforms.indexed) ...[
         if (index > 0)
           Container(
             width: 1,

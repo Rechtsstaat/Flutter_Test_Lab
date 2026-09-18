@@ -146,7 +146,8 @@ void main() {
           ),
           values: const {},
           photos: const [],
-          channels: const [ListingPlatform.zigbang, ListingPlatform.daangn],
+          // 잠시 내려 둔 플랫폼(당근)은 흐름에서 걸러지므로, 살아 있는 둘로 본다
+          channels: const [ListingPlatform.zigbang, ListingPlatform.dabang],
           remotePageBuilder: (_, platform, _) =>
               Center(child: Text('${platform.label} 페이지')),
         ),

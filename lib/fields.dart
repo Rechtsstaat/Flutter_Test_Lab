@@ -2,6 +2,33 @@ import 'photo_transfer.dart';
 
 enum ListingPlatform { zigbang, dabang, daangn }
 
+/// 플랫폼을 지금 쓸 수 있는가.
+///
+/// **켜고 끄는 스위치는 [ListingPlatformConfig.status] 한 곳뿐이다.** 화면도 흐름도
+/// 플랫폼 이름을 따로 적어 두지 않고 [livePlatforms] 와 [ListingPlatformConfig.isLive]
+/// 만 본다 — 새 플랫폼을 붙이거나 잠시 내릴 때 고칠 곳이 한 군데라는 뜻이다.
+enum PlatformStatus {
+  /// 연동·등록·종료가 다 된다.
+  live,
+
+  /// 화면에는 회색으로 남지만 고를 수 없다. 왜인지는 [ListingPlatformConfig.pausedNote].
+  paused,
+}
+
+/// 「지금 로그인돼 있나」를 확인하는 방법. **플랫폼마다 다르다** — 쿠키를 심는 쪽이 다르기
+/// 때문이다(미러 실측 2026-09-18).
+enum SessionCheck {
+  /// 쿠키가 JS 에 보인다. 직방 `ceo_zauth` 는 **페이지가** 심고 HttpOnly 가 아니다.
+  cookieVisible,
+
+  /// 플랫폼에 직접 물어야 한다. 다방 `auth_key` 는 서버가 심고 **HttpOnly** 라
+  /// `document.cookie` 에 아예 안 보인다 — 앱이 쿠키를 들여다보는 길이 없다.
+  platformAsks,
+
+  /// 로그인이 없는 플랫폼 (당근 미러).
+  none,
+}
+
 extension ListingPlatformConfig on ListingPlatform {
   String get label => switch (this) {
     ListingPlatform.zigbang => '직방',
@@ -19,8 +46,8 @@ extension ListingPlatformConfig on ListingPlatform {
   };
 
   /// The page a signed-in agent lands on (직방 CEO 대시보드, 다방프로 대시보드,
-  /// 당근부동산 중개소 홈). The mirror starts after login, so the 0011 login
-  /// stand-in hands over to this page.
+  /// 당근부동산 중개소 홈). 로그인이 안 돼 있으면 **플랫폼이** 이 주소를 로그인 화면으로
+  /// 되돌려 보낸다 — 그래서 0011 연동은 이 주소만 열면 된다.
   String get dashboardUrl => switch (this) {
     ListingPlatform.zigbang =>
       'https://mirror-dimension-lab.pages.dev/zigbang/',
@@ -54,6 +81,69 @@ extension ListingPlatformConfig on ListingPlatform {
     ListingPlatform.daangn => const ['거래완료', '미노출'],
   };
 
+  /// 지금 쓸 수 있는가. **여기가 유일한 스위치다.**
+  ///
+  /// 당근은 내리기(거래완료·미노출) 자리를 아직 수집하지 못해 잠시 내려 뒀다.
+  /// 다시 켜려면 이 한 줄을 `live` 로 되돌리면 된다 — 화면·흐름은 그대로 따라온다.
+  PlatformStatus get status => switch (this) {
+    ListingPlatform.zigbang => PlatformStatus.live,
+    ListingPlatform.dabang => PlatformStatus.live,
+    ListingPlatform.daangn => PlatformStatus.paused,
+  };
+
+  bool get isLive => status == PlatformStatus.live;
+
+  /// 회색 카드에 적어 주는 말. 쓸 수 있는 플랫폼에는 없다.
+  String? get pausedNote => switch (status) {
+    PlatformStatus.live => null,
+    PlatformStatus.paused => '준비 중',
+  };
+
+  /// 로그인 화면이 있는 플랫폼인가. 당근은 실물 로그인을 아직 수집하지 못했다.
+  ///
+  /// `!= daangn` 이 아니라 **switch 로 적는다** — 플랫폼이 하나 늘면 컴파일러가
+  /// 여기를 짚어 준다. 「빠뜨린 설정이 조용히 기본값을 갖는」 일이 없게.
+  bool get hasLogin => switch (this) {
+    ListingPlatform.zigbang => true,
+    ListingPlatform.dabang => true,
+    ListingPlatform.daangn => false,
+  };
+
+  /// 로그인 안 된 요청이 튕겨 가는 곳. 실물과 같은 자리다 — 직방은 랜딩(`/intro`)으로,
+  /// 다방은 로그인 화면으로 보낸다.
+  List<String> get signedOutPaths => switch (this) {
+    ListingPlatform.zigbang => const [
+      '/zigbang/intro',
+      '/zigbang/account/login',
+    ],
+    ListingPlatform.dabang => const ['/dabang/login'],
+    ListingPlatform.daangn => const [],
+  };
+
+  /// 지금 보고 있는 주소가 「로그인하라」는 화면인가.
+  bool isSignedOut(Uri url) =>
+      signedOutPaths.any((path) => url.path.startsWith(path));
+
+  /// 세션 쿠키 이름 (실측). 다방 것은 HttpOnly 라 JS 에서는 보이지 않는다.
+  String get sessionCookie => switch (this) {
+    ListingPlatform.zigbang => 'ceo_zauth',
+    ListingPlatform.dabang => 'auth_key',
+    ListingPlatform.daangn => '',
+  };
+
+  SessionCheck get sessionCheck => switch (this) {
+    ListingPlatform.zigbang => SessionCheck.cookieVisible,
+    ListingPlatform.dabang => SessionCheck.platformAsks,
+    ListingPlatform.daangn => SessionCheck.none,
+  };
+
+  /// 플랫폼에게 「로그인돼 있나」를 묻는 주소 (실물 경로 그대로). 답은 **코드가 아니라
+  /// 본문**으로 온다 — 로그인 전에도 200 이다(미러가 실물을 그대로 따른다).
+  String get sessionCheckPath => switch (this) {
+    ListingPlatform.dabang => '/dabang/api/v2/user/login/check',
+    _ => '',
+  };
+
   /// The mirror whose own upload handler takes the selected photos, if any.
   PhotoTarget? get photoTarget => switch (this) {
     ListingPlatform.zigbang => null,
@@ -64,7 +154,11 @@ extension ListingPlatformConfig on ListingPlatform {
   /// Zigbang and Dabang search addresses through the Kakao postcode window.
   /// Daangn searches its own same-origin endpoint inside the page, so its
   /// adapter picks the result itself.
-  bool get usesKakaoPostcode => this != ListingPlatform.daangn;
+  bool get usesKakaoPostcode => switch (this) {
+    ListingPlatform.zigbang => true,
+    ListingPlatform.dabang => true,
+    ListingPlatform.daangn => false,
+  };
 }
 
 enum InputType {
@@ -750,3 +844,13 @@ String? roomLayoutFrom({String? structure, String? duplex}) {
   if (structure == null) return null;
   return '$structure 원룸';
 }
+
+/// 지금 쓸 수 있는 플랫폼만. **고르기·연동·등록·종료는 전부 이것으로 돈다** —
+/// 새 플랫폼이 들어오면 enum 에 값을 더하고 설정만 채우면 여기에 저절로 들어오고,
+/// 잠시 내리면 여기서 저절로 빠진다.
+///
+/// 화면에 **회색으로 남겨 보여 주는** 자리(고르는 카드)만 [ListingPlatform.values] 를
+/// 그대로 쓰고, 고를 수 없게 막는다.
+List<ListingPlatform> get livePlatforms => ListingPlatform.values
+    .where((platform) => platform.isLive)
+    .toList(growable: false);
