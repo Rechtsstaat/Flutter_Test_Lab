@@ -1701,13 +1701,17 @@ String addressPickerFrameScript(String target) =>
     document.addEventListener('DOMContentLoaded', () => setTimeout(pick), {once: true});
     return;
   }
-  const target = $target;
-  if (!target) return;
+  const targetInput = $target;
+  const targets = (Array.isArray(targetInput) ? targetInput : [targetInput])
+    .map(value => String(value || '').trim()).filter(Boolean);
+  if (!targets.length) return;
   if (window.__flrPickerRan || window.__flrPickerRunning) return;
   window.__flrPickerRunning = true;
   // Only the search this app started gets picked for the user. If they clear the
   // box and look for somewhere else, that is their choice to make.
-  const squash = value => String(value === undefined || value === null ? '' : value).replace(/\\s+/g, '');
+  const clean = value => String(value === undefined || value === null ? '' : value)
+    .replace(/\\(.*?\\)/g, ' ').replace(/\\s+/g, ' ').trim();
+  const squash = value => clean(value).replace(/\\s+/g, '');
   const query = () => (document.getElementById('cQuery') || {}).value ||
     new URLSearchParams(location.search).get('cq') || '';
 
@@ -1720,38 +1724,52 @@ String addressPickerFrameScript(String target) =>
     ['경상북도', '경북'], ['경상남도', '경남'], ['제주특별자치도', '제주'], ['제주도', '제주'],
   ];
   const normalize = value => {
-    let text = squash(value);
+    let text = clean(value);
     for (const [full, short] of SIDO) {
       if (text.startsWith(full)) { text = short + text.slice(full.length); break; }
       if (text.startsWith(short)) break;
     }
-    // 건물 이름은 통합 폼 주소에 없을 때가 많다 — 점수에서 뺀다.
-    return text.replace(/\\(.*?\\)/g, '');
+    return text.replace(/\\s+/g, ' ').trim();
   };
 
-  const wanted = normalize(target);
+  const wanted = targets.map(normalize);
   // 번지·건물번호는 「123」과 「123-4」를 가르는 결정적인 부분이라 따로 본다.
   const numbersOf = text => (text.match(/\\d+(-\\d+)?/g) || []);
-  const wantedNumbers = numbersOf(wanted);
+  const tokensOf = text => normalize(text).split(/\\s+/).filter(Boolean);
+  const houseNumber = text => numbersOf(normalize(text)).slice(-1)[0] || '';
+  const localityTokens = text => tokensOf(text).filter(token =>
+    /(?:시|도|군|구)\$/.test(token));
+  const placeTokens = text => tokensOf(text).filter(token =>
+    /(?:읍|면|동|리|가|로|길)\$/.test(token));
+  const intersects = (left, right) => left.some(token => right.includes(token));
+
+  const matchesAddress = (candidate, expected) => {
+    const value = normalize(candidate);
+    if (!value || !expected) return false;
+    if (squash(value) === squash(expected)) return true;
+    const expectedHouse = houseNumber(expected);
+    if (!expectedHouse || houseNumber(value) !== expectedHouse) return false;
+    const expectedPlaces = placeTokens(expected);
+    const candidatePlaces = placeTokens(value);
+    // 같은 구와 번지만으로는 부족하다. 이전 검색의 다른 도로도 그 조건을
+    // 만족할 수 있으므로 도로명 또는 법정동이 반드시 겹쳐야 한다.
+    if (!expectedPlaces.length || !intersects(expectedPlaces, candidatePlaces)) return false;
+    const expectedLocalities = localityTokens(expected);
+    return !expectedLocalities.length || intersects(expectedLocalities, localityTokens(value));
+  };
 
   const score = candidate => {
     const value = normalize(candidate);
     if (!value) return -1;
-    if (value === wanted) return 1000;
-    let points = 0;
-    // 앞에서부터 같은 길이 — 시/도 → 구 → 도로명 순으로 겹칠수록 높다.
-    let prefix = 0;
-    while (prefix < value.length && prefix < wanted.length && value[prefix] === wanted[prefix]) prefix++;
-    points += prefix * 4;
-    const values = numbersOf(value);
-    for (const number of wantedNumbers) {
-      if (values.includes(number)) points += 60;
-      else if (values.some(other => other.split('-')[0] === number.split('-')[0])) points += 20;
+    let winner = -1;
+    for (const expected of wanted) {
+      if (squash(value) === squash(expected)) return 1000;
+      if (!matchesAddress(value, expected)) continue;
+      const sharedPlaces = placeTokens(expected).filter(token => placeTokens(value).includes(token)).length;
+      const sharedLocalities = localityTokens(expected).filter(token => localityTokens(value).includes(token)).length;
+      winner = Math.max(winner, 100 + sharedPlaces * 40 + sharedLocalities * 10);
     }
-    // 찾는 주소에 없는 번지가 후보에 더 붙어 있으면(123 → 123-4) 그만큼 뺀다.
-    points -= Math.max(0, values.length - wantedNumbers.length) * 15;
-    if (value.includes(wanted) || wanted.includes(value)) points += 40;
-    return points;
+    return winner;
   };
 
   const press = el => {
@@ -1781,20 +1799,7 @@ String addressPickerFrameScript(String target) =>
   };
 
   const stronglyMatches = item => {
-    if (!item) return false;
-    const value = normalize(item.address);
-    if (value === wanted) return true;
-    const values = numbersOf(value);
-    const exactNumbers = wantedNumbers.length > 0 &&
-      wantedNumbers.every(number => values.includes(number));
-    let prefix = 0;
-    while (prefix < value.length && prefix < wanted.length && value[prefix] === wanted[prefix]) prefix++;
-    const localityLength = Math.min(8, wanted.replace(/\\d.*\$/, '').length);
-    // 이전 검색 결과가 남아 있어도 같은 번지와 충분한 시/구/도로명 접두사가
-    // 겹치기 전에는 누르지 않는다. 번지 없는 주소는 포함 관계만 허용한다.
-    return wantedNumbers.length > 0
-      ? exactNumbers && prefix >= localityLength
-      : (value.includes(wanted) || wanted.includes(value));
+    return !!item && wanted.some(expected => matchesAddress(item.address, expected));
   };
 
   const waitFor = (predicate, timeout) => new Promise(resolve => {
@@ -1815,7 +1820,7 @@ String addressPickerFrameScript(String target) =>
     const ours = await waitFor(() => {
       const value = query();
       if (!value) return null;
-      return squash(value) === squash(target) ? value : null;
+      return targets.some(expected => squash(value) === squash(expected)) ? value : null;
     }, Math.max(0, deadline - Date.now()));
     if (!ours) return;
     try {
@@ -1833,8 +1838,6 @@ String addressPickerFrameScript(String target) =>
     if (!pick) return;
     // 완료 표시는 실제 후보를 찾은 뒤, 클릭 직전에만 세운다. 늦은 검색어/후보로
     // 빈 실행이 끝난 경우에는 다음 주입이 다시 시도할 수 있어야 한다.
-    window.__flrPickerRan = true;
-    try { sessionStorage.setItem('flrPicked', '1'); } catch (_) { /* ignore */ }
     press(pick.button);
 
     // 도로명 하나에 지번이 여럿이면 카카오가 지번 고르는 화면을 한 번 더 띄운다.
@@ -1844,9 +1847,16 @@ String addressPickerFrameScript(String target) =>
       const items = candidates().filter(item => list.contains(item.span));
       return items.length ? items : null;
     }, 2500);
-    if (!second) return;
+    if (!second) {
+      window.__flrPickerRan = true;
+      return;
+    }
     const follow = best(second);
     // 어느 지번인지 가릴 근거가 없으면 카카오가 준 첫 줄을 쓴다.
+    // 첫 클릭 전에 완료를 저장하면 2단계 화면이 새 문서로 열릴 때 그 문서가
+    // 즉시 종료된다. 실제 마지막 선택 직전에만 완료 상태를 남긴다.
+    window.__flrPickerRan = true;
+    try { sessionStorage.setItem('flrPicked', '1'); } catch (_) { /* ignore */ }
     press((follow || second[0]).button);
   })().finally(() => { window.__flrPickerRunning = false; });
 })();

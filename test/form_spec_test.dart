@@ -377,6 +377,65 @@ setTimeout(() => {
     }
   });
 
+  test('Kakao picker accepts the equivalent jibun but rejects a stale road', () {
+    final picker = addressPickerFrameScript(
+      '["서울특별시 강남구 테헤란로 123","서울특별시 강남구 역삼동 737"]',
+    );
+    final temp = File(
+      '${Directory.systemTemp.path}/variant_picker_${DateTime.now().microsecondsSinceEpoch}.js',
+    );
+    try {
+      temp.writeAsStringSync('''
+let clicks = 0;
+const clickedAddresses = [];
+let candidateAddress = '서울 강남구 다른로 123';
+global.window = global;
+global.location = {hostname: 'postcode.map.kakao.com', search: ''};
+global.sessionStorage = {getItem() { return null; }, setItem() {}};
+const button = {scrollIntoView() {}, click() { clicks++; clickedAddresses.push(candidateAddress); }};
+const span = {
+  querySelector(selector) { return selector === 'button.link_post' ? button : null; },
+  getAttribute(name) {
+    if (name === 'data-addr') return candidateAddress;
+    if (name === 'data-addr_type') return 'J';
+    return null;
+  },
+};
+global.document = {
+  readyState: 'complete',
+  getElementById(id) { return id === 'cQuery' ? {value: '서울특별시 강남구 테헤란로 123'} : null; },
+  querySelectorAll(selector) { return selector === 'span.txt_address[data-addr]' ? [span] : []; },
+  querySelector() { return null; },
+};
+setTimeout(() => { candidateAddress = '서울 강남구 역삼동 737'; }, 120);
+$picker
+setTimeout(() => {
+  if (clicks !== 1 || clickedAddresses[0] !== '서울 강남구 역삼동 737') {
+    console.error(JSON.stringify({clicks, clickedAddresses}));
+    process.exit(1);
+  }
+  process.exit(0);
+}, 2800);
+''');
+      final result = Process.runSync('node', [temp.path]);
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+    } finally {
+      if (temp.existsSync()) temp.deleteSync();
+    }
+  });
+
+  test('iOS frame bridge targets the owning WebView by unique channel', () {
+    final mirror = File('lib/mirror_session.dart').readAsStringSync();
+    final bridge = File(
+      'ios/Runner/FrameScriptBridge.swift',
+    ).readAsStringSync();
+
+    expect(mirror, contains("'targetChannel': _frameTargetChannel"));
+    expect(mirror, contains('FrameScriptTarget_'));
+    expect(bridge, contains('targets.object(forKey: targetChannel'));
+    expect(bridge, isNot(contains('seen.allObjects.last')));
+  });
+
   test('Dabang uses complex search for apartment and officetel addresses', () {
     for (final property in ['아파트', '오피스텔 원룸형', '오피스텔 분리/투룸형']) {
       final script = dabangInjectionScript(

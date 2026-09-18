@@ -16,19 +16,83 @@ void main() {
 
   const address = '서울특별시 강남구 테헤란로 123';
 
+  testWidgets(
+    'iOS bridge: simultaneous Zigbang and Dabang pick only their own address',
+    (tester) async {
+      const zigbangAddress = '서울특별시 강남구 테헤란로 123';
+      const dabangAddress = '서울특별시 강남구 테헤란로 152';
+      final zigbang = MirrorSession(
+        platform: ListingPlatform.zigbang,
+        values: const {'address': zigbangAddress, 'propertyType': '오픈형 원룸'},
+        loadTimeout: null,
+      );
+      final dabang = MirrorSession(
+        platform: ListingPlatform.dabang,
+        values: const {'address': dabangAddress, 'propertyType': '오픈형 원룸'},
+        loadTimeout: null,
+      );
+      addTearDown(() {
+        zigbang.dispose();
+        dabang.dispose();
+      });
+
+      // Both platform views remain mounted and visible. This is the important
+      // regression shape: a process flow retains earlier WebViews while the
+      // next platform is being filled, so the native bridge must target the
+      // WKUserContentController belonging to each individual session.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                Expanded(child: MirrorWebView(zigbang)),
+                Expanded(child: MirrorWebView(dabang)),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      final zigbangDom = await _waitForDom(
+        tester,
+        zigbang.controller,
+        _zigbangDomProbe,
+        (dom) =>
+            dom['overlay'] == false &&
+            '${dom['lat'] ?? ''}'.contains('테헤란로 123'),
+      );
+      final dabangDom = await _waitForDom(
+        tester,
+        dabang.controller,
+        _dabangDomProbe,
+        (dom) =>
+            dom['overlay'] == false &&
+            '${dom['picked'] ?? ''}'.contains('테헤란로 152'),
+      );
+
+      expect(zigbang.picksAddress, isTrue);
+      expect(dabang.picksAddress, isTrue);
+      expect(zigbangDom['overlay'], isFalse, reason: jsonEncode(zigbangDom));
+      expect(zigbangDom['lat'], contains('테헤란로 123'));
+      expect(zigbangDom['lat'], isNot(contains('테헤란로 152')));
+      expect(dabangDom['overlay'], isFalse, reason: jsonEncode(dabangDom));
+      expect(dabangDom['picked'], contains('테헤란로 152'));
+      expect(dabangDom['picked'], isNot(contains('테헤란로 123')));
+      expect(dabangDom['dongEnabled'], isTrue);
+    },
+    timeout: const Timeout(Duration(minutes: 4)),
+  );
+
   testWidgets('Zigbang: the Kakao result is picked and fills the address', (
     tester,
   ) async {
     final controller = await _open(tester, ListingPlatform.zigbang, address);
-    final dom = await _waitForDom(tester, controller, '''
-(() => {
-  const lat = document.querySelector('[name="lat"]');
-  return {
-    overlay: !!document.getElementById('flr-postcode-overlay'),
-    lat: lat ? String(lat.value || lat.textContent || '') : null,
-  };
-})()
-''', (dom) => dom['overlay'] == false && '${dom['lat'] ?? ''}'.isNotEmpty);
+    final dom = await _waitForDom(
+      tester,
+      controller,
+      _zigbangDomProbe,
+      (dom) => dom['overlay'] == false && '${dom['lat'] ?? ''}'.isNotEmpty,
+    );
     await _expectFramePickerStatus(tester, ListingPlatform.zigbang, controller);
     expect(dom['overlay'], isFalse, reason: jsonEncode(dom));
     expect(dom['lat'], contains('테헤란로'), reason: jsonEncode(dom));
@@ -41,7 +105,29 @@ void main() {
     final dom = await _waitForDom(
       tester,
       controller,
-      '''
+      _dabangDomProbe,
+      (dom) =>
+          dom['overlay'] == false && '${dom['picked'] ?? ''}'.contains('테헤란로'),
+    );
+    await _expectFramePickerStatus(tester, ListingPlatform.dabang, controller);
+    expect(dom['overlay'], isFalse, reason: jsonEncode(dom));
+    // 미러는 고른 주소를 도로명·지번으로 적고 동/호 칸을 켠다.
+    expect(dom['picked'], contains('테헤란로 123'), reason: jsonEncode(dom));
+    expect(dom['dongEnabled'], isTrue, reason: jsonEncode(dom));
+  }, timeout: const Timeout(Duration(minutes: 3)));
+}
+
+const _zigbangDomProbe = '''
+(() => {
+  const lat = document.querySelector('[name="lat"]');
+  return {
+    overlay: !!document.getElementById('flr-postcode-overlay'),
+    lat: lat ? String(lat.value || lat.textContent || '') : null,
+  };
+})()
+''';
+
+const _dabangDomProbe = '''
 (() => {
   const th = [...document.querySelectorAll('#room_info th')]
     .find(el => el.textContent.replace(/\\s+/g, '').includes('매물주소'));
@@ -55,17 +141,7 @@ void main() {
     dongEnabled: !!dong && !dong.disabled,
   };
 })()
-''',
-      (dom) =>
-          dom['overlay'] == false && '${dom['picked'] ?? ''}'.contains('테헤란로'),
-    );
-    await _expectFramePickerStatus(tester, ListingPlatform.dabang, controller);
-    expect(dom['overlay'], isFalse, reason: jsonEncode(dom));
-    // 미러는 고른 주소를 도로명·지번으로 적고 동/호 칸을 켠다.
-    expect(dom['picked'], contains('테헤란로 123'), reason: jsonEncode(dom));
-    expect(dom['dongEnabled'], isTrue, reason: jsonEncode(dom));
-  }, timeout: const Timeout(Duration(minutes: 3)));
-}
+''';
 
 /// Pumps the mirror page and returns its controller as soon as the WebView is
 /// mounted. Waiting for ListingResult here would hide a picker failure: the
