@@ -1,0 +1,7 @@
+# `render` drives a headless Chrome against the live mirror. It is the only
+# suite that can see where a button lands, so it runs by default; skip it on a
+# machine without Chrome or without the network with
+#
+#     flutter test --exclude-tags render
+tags:
+  render:
