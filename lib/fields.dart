@@ -19,13 +19,29 @@ extension ListingPlatformConfig on ListingPlatform {
   };
 
   /// The page a signed-in agent lands on (직방 CEO 대시보드, 다방프로 대시보드,
-  /// 당근부동산 중개소 홈). The mirror starts after login, so the 0011 login
-  /// stand-in hands over to this page.
+  /// 당근부동산 중개소 홈). Reaching it and *staying* there is what proves the
+  /// platform let the agent in: every other page bounces back to [loginUrl]
+  /// until it has.
   String get dashboardUrl => switch (this) {
     ListingPlatform.zigbang =>
       'https://mirror-dimension-lab.pages.dev/zigbang/',
     ListingPlatform.dabang => 'https://mirror-dimension-lab.pages.dev/dabang/',
     ListingPlatform.daangn => 'https://mirror-dimension-lab.pages.dev/daangn/',
+  };
+
+  /// The platform's own sign-in page, which 0011 shows as-is.
+  ///
+  /// The mirror captured 직방 and 다방 from the login screen forward and gates
+  /// everything behind it: asking for a form, a dashboard or an ad list
+  /// without a session answers `302` to 직방's `/zigbang/intro/` landing or
+  /// 다방's `/dabang/login/`. 당근's mirror has no gate, so its dashboard is
+  /// where its onboarding step both starts and ends.
+  String get loginUrl => switch (this) {
+    ListingPlatform.zigbang =>
+      'https://mirror-dimension-lab.pages.dev/zigbang/account/login/email/',
+    ListingPlatform.dabang =>
+      'https://mirror-dimension-lab.pages.dev/dabang/login/',
+    ListingPlatform.daangn => dashboardUrl,
   };
 
   /// Where the agent's live listings are managed — 2022 등록된 광고 보기 and

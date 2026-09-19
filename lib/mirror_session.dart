@@ -9,10 +9,21 @@ import 'package:webview_flutter_android/webview_flutter_android.dart'
     show AndroidWebViewController;
 
 import 'android_layout.dart';
-import 'design/tokens.dart';
 import 'fields.dart';
+import 'mobile_layout.dart';
 import 'photo_transfer.dart';
 import 'remote_form.dart';
+
+/// The mirror serves `.../oneroom/index.html` as a 308 to `.../oneroom/`, so
+/// the URL that finishes never equals the configured one. Comparing the
+/// directory form keeps both spellings pointing at one page.
+String mirrorDirectory(Uri uri) {
+  var path = uri.path;
+  if (path.endsWith('index.html')) {
+    path = path.substring(0, path.length - 'index.html'.length);
+  }
+  return path.endsWith('/') ? path : '$path/';
+}
 
 /// One platform page living inside a native 한방 screen.
 ///
@@ -106,8 +117,19 @@ class MirrorPage extends ChangeNotifier {
   void configure(WebViewController controller) {}
 
   /// Called for every finished main-frame load after the press watcher is in.
+  ///
+  /// Landing anywhere but the page that was asked for means the platform sent
+  /// the agent back to sign in — that is the only way a mirror page answers a
+  /// request it will not serve.
   @protected
-  Future<void> onPage(Uri url) async => markLoaded();
+  Future<void> onPage(Uri url) async {
+    if (url.host == initialUrl.host &&
+        mirrorDirectory(url) != mirrorDirectory(initialUrl)) {
+      fail(signInLost(platform));
+      return;
+    }
+    markLoaded();
+  }
 
   bool _samePage(Uri uri) =>
       uri.host == initialUrl.host && uri.path == initialUrl.path;
@@ -123,6 +145,20 @@ class MirrorPage extends ChangeNotifier {
     }
     final uri = Uri.tryParse(url);
     if (uri == null || _disposed) return;
+    // Every mirror page the agent sees is a desktop page, 로그인 and 광고 목록
+    // no less than the form, so all of them get restyled — and before
+    // [onPage], so an adapter never fills a form that is still 1200px wide.
+    // Restyling is the least important thing here: if it throws, the page and
+    // its automation carry on without it.
+    final layout = mirrorMobileLayoutScript(platform, uri);
+    if (layout != null) {
+      try {
+        await controller.runJavaScript(layout);
+      } catch (_) {
+        // A navigation during installation gets a fresh script next load.
+      }
+    }
+    if (_disposed) return;
     await onPage(uri);
   }
 
@@ -243,17 +279,6 @@ class MirrorSession extends MirrorPage {
     );
   }
 
-  /// The mirror serves `.../oneroom/index.html` as a 308 to `.../oneroom/`, so
-  /// the URL that finishes never equals the configured one. Comparing the
-  /// directory form keeps both spellings pointing at one page.
-  static String _directory(Uri uri) {
-    var path = uri.path;
-    if (path.endsWith('index.html')) {
-      path = path.substring(0, path.length - 'index.html'.length);
-    }
-    return path.endsWith('/') ? path : '$path/';
-  }
-
   void _receive(JavaScriptMessage message) {
     try {
       final result = jsonDecode(message.message) as Map<String, dynamic>;
@@ -277,9 +302,14 @@ class MirrorSession extends MirrorPage {
 
   @override
   Future<void> onPage(Uri url) async {
-    if (url.host != initialUrl.host ||
-        _directory(url) != _directory(initialUrl) ||
-        _lastInjectedUrl == url.toString()) {
+    if (url.host != initialUrl.host || _lastInjectedUrl == url.toString()) {
+      return;
+    }
+    if (mirrorDirectory(url) != mirrorDirectory(initialUrl)) {
+      // 다방·직방은 로그인이 없으면 폼을 열어 주지 않고 로그인·랜딩으로 302 를
+      // 보낸다. 여기서 멈추지 않으면 어댑터는 영영 돌지 않고, 화면은 3분짜리
+      // [loadTimeout] 이 끝날 때까지 미러의 첫 화면을 들고 기다린다.
+      if (!loaded) fail(signInLost(platform));
       return;
     }
     _lastInjectedUrl = url.toString();
@@ -383,36 +413,58 @@ class MirrorSession extends MirrorPage {
   }
 }
 
-/// 0011's platform login. The mirror starts after login, so the WebView shows
-/// a stand-in login page first and then the platform's signed-in dashboard.
-/// 한방 never reads what is typed: the page clears its fields before leaving
-/// and only reports that a login was submitted.
+/// 0011's platform login: the platform's own sign-in page, shown as-is.
+///
+/// 한방 never sees what is typed — the credentials go from the platform's own
+/// form to the platform's own endpoint, and the session it hands back lives in
+/// the WebView's cookie store where only the platform can read it.
+///
+/// This used to be a stand-in page of 한방's own, on the premise that the
+/// mirror began after login. It no longer does, and the stand-in's handover to
+/// [ListingPlatformConfig.dashboardUrl] set no session, so the mirror bounced
+/// every later request: onboarding reported 연동 완료 while the WebView sat on
+/// 직방's 랜딩, and 매물 등록 then waited out its whole timeout on that screen.
 class MirrorLogin extends MirrorPage {
+  /// Opens the dashboard rather than the sign-in page, because a session that
+  /// is still good should not ask the agent to type anything: if the platform
+  /// serves the dashboard, they are already in. Only a bounce means otherwise,
+  /// and then [ListingPlatformConfig.loginUrl] is where they are sent.
   MirrorLogin({required super.platform})
-    : super(
-        url: Uri.parse(platform.dashboardUrl),
-        html: loginStandInHtml(platform),
-      );
+    : super(url: Uri.parse(platform.dashboardUrl));
 
-  bool submitted = false;
-  bool get linked => submitted && loaded;
+  bool _sentToGate = false;
 
-  @override
-  void configure(WebViewController controller) {
-    controller.addJavaScriptChannel(
-      'LoginBridge',
-      onMessageReceived: (_) {
-        submitted = true;
-        notifyListeners();
-      },
-    );
-  }
+  /// Whether the platform let the agent in. Signing in is the one thing that
+  /// stops the mirror from turning the dashboard away, so arriving there is
+  /// the proof — and it is proof 한방 can see without reading anything the
+  /// agent typed.
+  bool get linked => loaded;
 
   @override
   Future<void> onPage(Uri url) async {
-    if (submitted && url.host == initialUrl.host) markLoaded();
+    if (url.host != initialUrl.host) return;
+    if (mirrorDirectory(url) == mirrorDirectory(initialUrl)) {
+      markLoaded();
+      return;
+    }
+    // Turned away. Where a platform sends a stranger is not always where it
+    // takes a password — 직방 lands on its /intro/ pitch — so go to the page
+    // that does, once.
+    if (_sentToGate) return;
+    _sentToGate = true;
+    final gate = Uri.parse(platform.loginUrl);
+    if (mirrorDirectory(url) == mirrorDirectory(gate)) return;
+    try {
+      await controller.loadRequest(gate);
+    } catch (_) {
+      // The agent can still walk there from the landing page.
+    }
   }
 }
+
+/// What 한방 says when a platform sends the agent back to its sign-in page.
+String signInLost(ListingPlatform platform) =>
+    '${platform.label} 로그인이 풀렸어요. 홈에서 ${platform.label}을 다시 연동해 주세요.';
 
 /// 로그아웃이 지워야 하는 나머지 반쪽 — 플랫폼이 웹뷰에 심어 둔 로그인.
 ///
@@ -455,60 +507,6 @@ String pressWatcherScript(List<String> labels) =>
   }, true);
 })();
 ''';
-
-/// A neutral login page standing in for the platform's own. It posts nothing
-/// anywhere: the fields are wiped before it moves on.
-String loginStandInHtml(ListingPlatform platform) {
-  final name = const HtmlEscape().convert(platform.label);
-  final color =
-      '#${(platform.color.toARGB32() & 0xffffff).toRadixString(16).padLeft(6, '0')}';
-  return '''
-<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>$name 로그인</title>
-<style>
-  * { box-sizing: border-box; }
-  /* The simulator's WebKit does not fall back to a Hangul face from
-     -apple-system, so name one first. */
-  body { margin: 0; padding: 40px 24px; font: 15px/1.5 "Apple SD Gothic Neo", -apple-system, BlinkMacSystemFont, "Noto Sans KR", sans-serif; color: #20232b; background: #fff; }
-  input, button { font-family: inherit; }
-  .mark { width: 48px; height: 48px; border-radius: 12px; background: $color; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; }
-  h1 { font-size: 22px; margin: 20px 0 4px; }
-  p { margin: 0 0 24px; color: #626a78; font-size: 13px; }
-  label { display: block; font-size: 13px; font-weight: 600; margin: 16px 0 6px; color: #4d5360; }
-  input { width: 100%; height: 48px; border: 1px solid #d2d6de; border-radius: 10px; padding: 0 14px; font-size: 15px; }
-  input:focus { outline: none; border-color: $color; }
-  button { width: 100%; height: 50px; margin-top: 28px; border: 0; border-radius: 10px; background: $color; color: #fff; font-size: 16px; font-weight: 600; }
-  .note { margin-top: 20px; padding: 12px 14px; border-radius: 10px; background: #f2f4f7; color: #626a78; font-size: 12px; }
-</style>
-</head>
-<body>
-  <div class="mark">$name</div>
-  <h1>$name 중개사 로그인</h1>
-  <p>로그인하면 한방이 이 계정으로 광고를 올릴 수 있어요.</p>
-  <form id="login" autocomplete="off">
-    <label for="id">아이디</label>
-    <input id="id" name="id" autocomplete="off" autocapitalize="off" placeholder="아이디 입력">
-    <label for="pw">비밀번호</label>
-    <input id="pw" name="pw" type="password" autocomplete="off" placeholder="비밀번호 입력">
-    <button type="submit">로그인</button>
-  </form>
-  <div class="note">미러 환경의 임시 로그인 화면입니다. 실제 계정 정보를 입력하지 마세요. 입력한 값은 어디에도 보내지 않습니다.</div>
-<script>
-  document.getElementById('login').addEventListener('submit', event => {
-    event.preventDefault();
-    for (const input of event.target.querySelectorAll('input')) input.value = '';
-    try { window.LoginBridge.postMessage('submitted'); } catch (_) {}
-    setTimeout(() => { location.href = ${jsonEncode(platform.dashboardUrl)}; }, 300);
-  });
-</script>
-</body>
-</html>
-''';
-}
 
 /// The WebView for a [MirrorPage], sized by its parent.
 class MirrorWebView extends StatelessWidget {
