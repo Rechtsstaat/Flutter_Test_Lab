@@ -41,7 +41,6 @@ class MirrorPage extends ChangeNotifier {
     required Uri url,
     this.watchLabels = const [],
     this.loadTimeout,
-    String? html,
   }) : initialUrl = url {
     controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -76,11 +75,7 @@ class MirrorPage extends ChangeNotifier {
         onPageFinished: _pageFinished,
       ),
     );
-    if (html != null) {
-      controller.loadHtmlString(html, baseUrl: url.toString());
-    } else {
-      controller.loadRequest(url);
-    }
+    controller.loadRequest(url);
     final timeout = loadTimeout;
     if (timeout != null) {
       _timeout = Timer(timeout, () {
@@ -116,20 +111,17 @@ class MirrorPage extends ChangeNotifier {
   @protected
   void configure(WebViewController controller) {}
 
-  /// Called for every finished main-frame load after the press watcher is in.
+  /// 플랫폼이 로그인 화면으로 되돌려 보냈을 때 그것을 실패로 볼 것인가.
   ///
-  /// Landing anywhere but the page that was asked for means the platform sent
-  /// the agent back to sign in — that is the only way a mirror page answers a
-  /// request it will not serve.
+  /// 등록·종료 화면에서 그런 일이 벌어졌다면 **로그인이 풀린 것**이라 거기서 할 수 있는
+  /// 일이 없다. 연동 화면([MirrorLogin])만 거기가 목적지라 아니라고 답한다.
   @protected
-  Future<void> onPage(Uri url) async {
-    if (url.host == initialUrl.host &&
-        mirrorDirectory(url) != mirrorDirectory(initialUrl)) {
-      fail(signInLost(platform));
-      return;
-    }
-    markLoaded();
-  }
+  bool get leavesOnSignedOut => true;
+
+  /// Called for every finished main-frame load after the press watcher is in,
+  /// and after [leavesOnSignedOut] has had its say.
+  @protected
+  Future<void> onPage(Uri url) async => markLoaded();
 
   bool _samePage(Uri uri) =>
       uri.host == initialUrl.host && uri.path == initialUrl.path;
@@ -145,8 +137,12 @@ class MirrorPage extends ChangeNotifier {
     }
     final uri = Uri.tryParse(url);
     if (uri == null || _disposed) return;
-    // Every mirror page the agent sees is a desktop page, 로그인 and 광고 목록
-    // no less than the form, so all of them get restyled — and before
+    if (leavesOnSignedOut && platform.isSignedOut(uri)) {
+      fail(signInLost(platform));
+      return;
+    }
+    // Every mirror page the agent stays on is a desktop page, 로그인 and 광고
+    // 목록 no less than the form, so all of them get restyled — and before
     // [onPage], so an adapter never fills a form that is still 1200px wide.
     // Restyling is the least important thing here: if it throws, the page and
     // its automation carry on without it.
@@ -305,13 +301,11 @@ class MirrorSession extends MirrorPage {
     if (url.host != initialUrl.host || _lastInjectedUrl == url.toString()) {
       return;
     }
-    if (mirrorDirectory(url) != mirrorDirectory(initialUrl)) {
-      // 다방·직방은 로그인이 없으면 폼을 열어 주지 않고 로그인·랜딩으로 302 를
-      // 보낸다. 여기서 멈추지 않으면 어댑터는 영영 돌지 않고, 화면은 3분짜리
-      // [loadTimeout] 이 끝날 때까지 미러의 첫 화면을 들고 기다린다.
-      if (!loaded) fail(signInLost(platform));
-      return;
-    }
+    // 미러는 `.../oneroom/index.html` 을 `.../oneroom/` 으로 308 을 보내므로 끝난
+    // 주소가 설정한 주소와 글자 그대로 같은 적이 없다. 디렉터리 모양으로 견준다.
+    // (로그인이 풀려 폼 대신 로그인 화면이 온 경우는 [leavesOnSignedOut] 이 이미
+    // 걸러 냈다.)
+    if (mirrorDirectory(url) != mirrorDirectory(initialUrl)) return;
     _lastInjectedUrl = url.toString();
     _photosDone = platform.photoTarget == null || photos.isEmpty;
     markLoaded();
@@ -413,58 +407,139 @@ class MirrorSession extends MirrorPage {
   }
 }
 
-/// 0011's platform login: the platform's own sign-in page, shown as-is.
+/// 0011 플랫폼 연동 — **플랫폼 자신의 로그인 화면**에서 로그인하게 한다.
 ///
-/// 한방 never sees what is typed — the credentials go from the platform's own
-/// form to the platform's own endpoint, and the session it hands back lives in
-/// the WebView's cookie store where only the platform can read it.
+/// 앱은 로그인 화면을 따로 부르지 않고 **대시보드 주소만 연다.** 로그인이 안 돼 있으면
+/// 플랫폼이 알아서 로그인 화면으로 되돌려 보내고(직방은 랜딩 `/intro`, 다방은 `/login`),
+/// 이미 돼 있으면 로그인 화면 없이 바로 대시보드가 뜬다 — 실물이 그렇게 움직인다.
 ///
-/// This used to be a stand-in page of 한방's own, on the premise that the
-/// mirror began after login. It no longer does, and the stand-in's handover to
-/// [ListingPlatformConfig.dashboardUrl] set no session, so the mirror bounced
-/// every later request: onboarding reported 연동 완료 while the WebView sat on
-/// 직방's 랜딩, and 매물 등록 then waited out its whole timeout on that screen.
+/// 한방은 아이디도 비밀번호도 보지 않는다. 사람이 플랫폼 화면에 직접 넣고, 앱은
+/// **세션이 생겼는지만** 확인한다. 그 확인법이 플랫폼마다 다르다 (미러 실측):
+///
+/// | 플랫폼 | 열쇠 | 확인법 |
+/// |---|---|---|
+/// | 직방 | `ceo_zauth` — **페이지가** 심고 HttpOnly 아님 | `document.cookie` 로 보인다 |
+/// | 다방 | `auth_key` — 서버가 심고 **HttpOnly** | 안 보인다. 플랫폼에 `login/check` 로 묻는다 |
+/// | 당근 | 없음 (수집 없음) | 화면이 뜨면 연결로 본다 |
 class MirrorLogin extends MirrorPage {
-  /// Opens the dashboard rather than the sign-in page, because a session that
-  /// is still good should not ask the agent to type anything: if the platform
-  /// serves the dashboard, they are already in. Only a bounce means otherwise,
-  /// and then [ListingPlatformConfig.loginUrl] is where they are sent.
+  /// 로그인 화면이 아니라 **대시보드 주소**를 연다. 아직 살아 있는 세션이라면 아무것도
+  /// 타이핑하게 해서는 안 되기 때문이다 — 플랫폼이 대시보드를 내주면 이미 들어와 있는
+  /// 것이고, 되돌려 보낼 때만 플랫폼 자신의 로그인 화면이 뜬다.
   MirrorLogin({required super.platform})
     : super(url: Uri.parse(platform.dashboardUrl));
 
-  bool _sentToGate = false;
+  /// 세션이 실제로 있는가. 「제출했다」가 아니라 **플랫폼이 인정했는가**다.
+  bool linked = false;
 
-  /// Whether the platform let the agent in. Signing in is the one thing that
-  /// stops the mirror from turning the dashboard away, so arriving there is
-  /// the proof — and it is proof 한방 can see without reading anything the
-  /// agent typed.
-  bool get linked => loaded;
+  /// 무엇을 보고 그렇게 판단했는지 (화면에 적어 주고, 나중에 원인을 찾을 때 쓴다).
+  SessionEvidence evidence = SessionEvidence.none;
+
+  /// 지금 보고 있는 것이 로그인 화면인가 (대시보드가 아니라).
+  bool onLoginScreen = false;
+
+  /// 여기서는 로그인 화면이 목적지다 — 튕겨 온 것을 실패로 보지 않는다.
+  @override
+  bool get leavesOnSignedOut => false;
+
+  @override
+  void configure(WebViewController controller) {
+    controller.addJavaScriptChannel('SessionProbe', onMessageReceived: _probed);
+  }
 
   @override
   Future<void> onPage(Uri url) async {
-    if (url.host != initialUrl.host) return;
-    if (mirrorDirectory(url) == mirrorDirectory(initialUrl)) {
-      markLoaded();
+    markLoaded();
+    onLoginScreen = platform.isSignedOut(url);
+    if (!platform.hasLogin) {
+      // 로그인이 없는 플랫폼은 화면이 떴다는 것 말고 볼 것이 없다.
+      _settle(true, SessionEvidence.page);
       return;
     }
-    // Turned away. Where a platform sends a stranger is not always where it
-    // takes a password — 직방 lands on its /intro/ pitch — so go to the page
-    // that does, once.
-    if (_sentToGate) return;
-    _sentToGate = true;
-    final gate = Uri.parse(platform.loginUrl);
-    if (mirrorDirectory(url) == mirrorDirectory(gate)) return;
+    notifyListeners();
     try {
-      await controller.loadRequest(gate);
+      await controller.runJavaScript(sessionProbeScript(platform));
     } catch (_) {
-      // The agent can still walk there from the landing page.
+      _settle(!onLoginScreen, SessionEvidence.page);
     }
+  }
+
+  void _probed(JavaScriptMessage message) {
+    switch (message.message) {
+      case 'true':
+        _settle(
+          true,
+          platform.sessionCheck == SessionCheck.cookieVisible
+              ? SessionEvidence.cookie
+              : SessionEvidence.platform,
+        );
+      case 'false':
+        _settle(false, SessionEvidence.none);
+      default:
+        // 물어보지 못했다(문지기·네트워크). 그러면 **화면**으로 판단한다 —
+        // 플랫폼이 로그인 화면으로 되돌려 보내지 않았다는 것 자체가 신호다.
+        _settle(!onLoginScreen, SessionEvidence.page);
+    }
+  }
+
+  void _settle(bool value, SessionEvidence how) {
+    final next = value ? how : SessionEvidence.none;
+    if (linked == value && evidence == next) return;
+    linked = value;
+    evidence = next;
+    notifyListeners();
+  }
+}
+
+/// 무엇을 보고 「연결됐다」고 판단했는가.
+enum SessionEvidence {
+  /// 쿠키가 JS 에 그대로 보였다 (직방).
+  cookie,
+
+  /// 플랫폼이 물음에 그렇다고 답했다 (다방 `login/check`).
+  platform,
+
+  /// 로그인 화면으로 되돌려 보내지 않았다 — 화면으로만 판단했다.
+  page,
+
+  none;
+
+  String get label => switch (this) {
+    SessionEvidence.cookie => '쿠키 확인',
+    SessionEvidence.platform => '플랫폼이 확인',
+    SessionEvidence.page => '화면으로 확인',
+    SessionEvidence.none => '',
+  };
+}
+
+/// 페이지 안에서 「지금 로그인돼 있나」를 확인하고 `SessionProbe` 로 답하는 스크립트.
+/// 답은 `'true'` · `'false'` · 그 밖(못 물어봤다) 셋 중 하나다.
+String sessionProbeScript(ListingPlatform platform) {
+  const open = '(() => { try {';
+  const close = '} catch (_) {} })();';
+  switch (platform.sessionCheck) {
+    // 직방: 페이지 JS 가 심은 쿠키라 document.cookie 에 그대로 있다.
+    case SessionCheck.cookieVisible:
+      final name = jsonEncode('${platform.sessionCookie}=');
+      return '$open window.SessionProbe.postMessage(String('
+          'document.cookie.split("; ").some(c => c.startsWith($name))));$close';
+    // 다방: auth_key 가 HttpOnly 라 JS 로는 볼 수 없다. 플랫폼에 직접 묻는 수밖에 없고,
+    // 답은 **코드가 아니라 본문**에 있다 — 로그인 전에도 200 이 온다.
+    case SessionCheck.platformAsks:
+      final ask = jsonEncode(platform.sessionCheckPath);
+      return '(() => {\n'
+          "  fetch($ask, {credentials: 'same-origin', headers: {accept: 'application/json'}})\n"
+          '    .then(response => response.ok ? response.json() : Promise.reject(response.status))\n'
+          '    .then(body => { window.SessionProbe.postMessage(String(!!body.isLogin)); })\n'
+          "    .catch(() => { try { window.SessionProbe.postMessage('unknown'); } catch (_) {} });\n"
+          '})();';
+    case SessionCheck.none:
+      return "$open window.SessionProbe.postMessage('unknown');$close";
   }
 }
 
 /// What 한방 says when a platform sends the agent back to its sign-in page.
 String signInLost(ListingPlatform platform) =>
-    '${platform.label} 로그인이 풀렸어요. 홈에서 ${platform.label}을 다시 연동해 주세요.';
+    '${platform.label} 로그인이 풀렸어요. 플랫폼 연동을 다시 해주세요.';
 
 /// 로그아웃이 지워야 하는 나머지 반쪽 — 플랫폼이 웹뷰에 심어 둔 로그인.
 ///
