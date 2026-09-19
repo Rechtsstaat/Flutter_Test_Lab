@@ -10,8 +10,20 @@ import 'package:webview_flutter_android/webview_flutter_android.dart'
 
 import 'android_layout.dart';
 import 'fields.dart';
+import 'mobile_layout.dart';
 import 'photo_transfer.dart';
 import 'remote_form.dart';
+
+/// The mirror serves `.../oneroom/index.html` as a 308 to `.../oneroom/`, so
+/// the URL that finishes never equals the configured one. Comparing the
+/// directory form keeps both spellings pointing at one page.
+String mirrorDirectory(Uri uri) {
+  var path = uri.path;
+  if (path.endsWith('index.html')) {
+    path = path.substring(0, path.length - 'index.html'.length);
+  }
+  return path.endsWith('/') ? path : '$path/';
+}
 
 /// One platform page living inside a native 한방 screen.
 ///
@@ -106,7 +118,8 @@ class MirrorPage extends ChangeNotifier {
   @protected
   bool get leavesOnSignedOut => true;
 
-  /// Called for every finished main-frame load after the press watcher is in.
+  /// Called for every finished main-frame load after the press watcher is in,
+  /// and after [leavesOnSignedOut] has had its say.
   @protected
   Future<void> onPage(Uri url) async => markLoaded();
 
@@ -125,9 +138,23 @@ class MirrorPage extends ChangeNotifier {
     final uri = Uri.tryParse(url);
     if (uri == null || _disposed) return;
     if (leavesOnSignedOut && platform.isSignedOut(uri)) {
-      fail('${platform.label} 로그인이 풀렸어요. 플랫폼 연동을 다시 해주세요.');
+      fail(signInLost(platform));
       return;
     }
+    // Every mirror page the agent stays on is a desktop page, 로그인 and 광고
+    // 목록 no less than the form, so all of them get restyled — and before
+    // [onPage], so an adapter never fills a form that is still 1200px wide.
+    // Restyling is the least important thing here: if it throws, the page and
+    // its automation carry on without it.
+    final layout = mirrorMobileLayoutScript(platform, uri);
+    if (layout != null) {
+      try {
+        await controller.runJavaScript(layout);
+      } catch (_) {
+        // A navigation during installation gets a fresh script next load.
+      }
+    }
+    if (_disposed) return;
     await onPage(uri);
   }
 
@@ -248,17 +275,6 @@ class MirrorSession extends MirrorPage {
     );
   }
 
-  /// The mirror serves `.../oneroom/index.html` as a 308 to `.../oneroom/`, so
-  /// the URL that finishes never equals the configured one. Comparing the
-  /// directory form keeps both spellings pointing at one page.
-  static String _directory(Uri uri) {
-    var path = uri.path;
-    if (path.endsWith('index.html')) {
-      path = path.substring(0, path.length - 'index.html'.length);
-    }
-    return path.endsWith('/') ? path : '$path/';
-  }
-
   void _receive(JavaScriptMessage message) {
     try {
       final result = jsonDecode(message.message) as Map<String, dynamic>;
@@ -282,11 +298,14 @@ class MirrorSession extends MirrorPage {
 
   @override
   Future<void> onPage(Uri url) async {
-    if (url.host != initialUrl.host ||
-        _directory(url) != _directory(initialUrl) ||
-        _lastInjectedUrl == url.toString()) {
+    if (url.host != initialUrl.host || _lastInjectedUrl == url.toString()) {
       return;
     }
+    // 미러는 `.../oneroom/index.html` 을 `.../oneroom/` 으로 308 을 보내므로 끝난
+    // 주소가 설정한 주소와 글자 그대로 같은 적이 없다. 디렉터리 모양으로 견준다.
+    // (로그인이 풀려 폼 대신 로그인 화면이 온 경우는 [leavesOnSignedOut] 이 이미
+    // 걸러 냈다.)
+    if (mirrorDirectory(url) != mirrorDirectory(initialUrl)) return;
     _lastInjectedUrl = url.toString();
     _photosDone = platform.photoTarget == null || photos.isEmpty;
     markLoaded();
@@ -403,6 +422,9 @@ class MirrorSession extends MirrorPage {
 /// | 다방 | `auth_key` — 서버가 심고 **HttpOnly** | 안 보인다. 플랫폼에 `login/check` 로 묻는다 |
 /// | 당근 | 없음 (수집 없음) | 화면이 뜨면 연결로 본다 |
 class MirrorLogin extends MirrorPage {
+  /// 로그인 화면이 아니라 **대시보드 주소**를 연다. 아직 살아 있는 세션이라면 아무것도
+  /// 타이핑하게 해서는 안 되기 때문이다 — 플랫폼이 대시보드를 내주면 이미 들어와 있는
+  /// 것이고, 되돌려 보낼 때만 플랫폼 자신의 로그인 화면이 뜬다.
   MirrorLogin({required super.platform})
     : super(url: Uri.parse(platform.dashboardUrl));
 
@@ -514,6 +536,10 @@ String sessionProbeScript(ListingPlatform platform) {
       return "$open window.SessionProbe.postMessage('unknown');$close";
   }
 }
+
+/// What 한방 says when a platform sends the agent back to its sign-in page.
+String signInLost(ListingPlatform platform) =>
+    '${platform.label} 로그인이 풀렸어요. 플랫폼 연동을 다시 해주세요.';
 
 /// 로그아웃이 지워야 하는 나머지 반쪽 — 플랫폼이 웹뷰에 심어 둔 로그인.
 ///

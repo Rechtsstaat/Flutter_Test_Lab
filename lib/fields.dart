@@ -55,6 +55,21 @@ extension ListingPlatformConfig on ListingPlatform {
     ListingPlatform.daangn => 'https://mirror-dimension-lab.pages.dev/daangn/',
   };
 
+  /// The platform's own sign-in page, which 0011 shows as-is.
+  ///
+  /// The mirror captured 직방 and 다방 from the login screen forward and gates
+  /// everything behind it: asking for a form, a dashboard or an ad list
+  /// without a session answers `302` to 직방's `/zigbang/intro/` landing or
+  /// 다방's `/dabang/login/`. 당근's mirror has no gate, so its dashboard is
+  /// where its onboarding step both starts and ends.
+  String get loginUrl => switch (this) {
+    ListingPlatform.zigbang =>
+      'https://mirror-dimension-lab.pages.dev/zigbang/account/login/email/',
+    ListingPlatform.dabang =>
+      'https://mirror-dimension-lab.pages.dev/dabang/login/',
+    ListingPlatform.daangn => dashboardUrl,
+  };
+
   /// Where the agent's live listings are managed — 2022 등록된 광고 보기 and
   /// 3021 광고 종료 open this.
   String get listingsUrl => switch (this) {
