@@ -186,6 +186,15 @@ class MirrorPage extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 페이지가 답을 했으므로 감시 시계를 내린다.
+  ///
+  /// 이 시계는 「페이지가 끝내 안 떴다」를 잡는 것이다. 폼이 떠서 어댑터가 돌기
+  /// 시작한 뒤의 기다림은 저마다 제 시간과 **제 이유**를 갖고 있으므로(어댑터
+  /// [MirrorSession.adapterTimeout], 사진 한 장의 [settleBudget]), 그것들을
+  /// 한꺼번에 「응답을 기다리다 멈췄어요」로 덮으면 사람에게 더 나쁜 말을 하게 된다.
+  @protected
+  void stopLoadTimeout() => _timeout?.cancel();
+
   @protected
   void markLoaded() {
     if (_disposed || loaded) return;
@@ -276,6 +285,11 @@ class MirrorSession extends MirrorPage {
   /// How long a live form gets to render its fields after the page loads.
   static const formReadyTimeout = Duration(seconds: 20);
 
+  /// How long the adapter gets to finish before the photos go in anyway. The
+  /// Dabang adapter waits for the address on its own (up to a minute) and then
+  /// fills some 40 fields, so this has to be generous.
+  static const adapterTimeout = Duration(minutes: 3);
+
   /// The adapter reported and the photos settled: the form is as full as 한방
   /// can make it, and the rest is the agent's.
   bool get filled => _resultIn && _photosDone;
@@ -349,6 +363,9 @@ class MirrorSession extends MirrorPage {
           '자동 입력이 일부만 됐을 수 있습니다.';
     }
     if (failure != null || _disposed) return;
+    // 폼은 떴다. 여기서부터는 채우기와 사진 첨부가 **차례로** 돌고(사진은 폼이 되돌아갈
+    // 때 쓸려 가므로 나란히 돌릴 수 없다) 저마다 제 시간과 제 이유를 갖고 있다.
+    stopLoadTimeout();
     final address = '${values['address'] ?? ''}';
     final kakao = platform.usesKakaoPostcode;
     picksAddress = kakao && address.isNotEmpty
@@ -372,6 +389,7 @@ class MirrorSession extends MirrorPage {
         ListingPlatform.dabang => dabangInjectionScript(payload),
         ListingPlatform.daangn => daangnInjectionScript(payload),
       });
+      await _adapterDone();
       await _transferPhotos();
     } catch (error) {
       status = '자동 입력 JavaScript 오류: $error';
@@ -394,6 +412,19 @@ class MirrorSession extends MirrorPage {
       await Future<void>.delayed(const Duration(milliseconds: 300));
     }
     return false;
+  }
+
+  /// 어댑터가 제 차례를 마칠 때까지 기다린다. **사진은 그 뒤에 붙인다.**
+  /// 왜 그래야 하는지는 [awaitFormAdapter] 에 적었다.
+  Future<void> _adapterDone() async {
+    if (platform.photoTarget == null || photos.isEmpty) return;
+    photoStatus = '폼 입력이 끝나면 사진을 붙입니다…';
+    notifyListeners();
+    await awaitFormAdapter(
+      evaluate: controller.runJavaScriptReturningResult,
+      timeout: adapterTimeout,
+      isCancelled: () => _disposed || failure != null,
+    );
   }
 
   Future<void> _transferPhotos() async {

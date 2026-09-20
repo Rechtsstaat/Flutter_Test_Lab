@@ -47,6 +47,18 @@ enum PlatformSite {
       : PlatformSite.live;
 }
 
+/// 남의 계정으로 어댑터를 재 보는 동안 거는 빗장.
+///
+/// 광고 목록(`listingsUrl`)과 광고 종료 화면에는 **지금 운영 중인 실제 매물**이 걸려
+/// 있다. 폼 주입을 고치는 동안 그 자리에 들어갈 일은 없고, 「광고 종료」는 한 번 누르면
+/// 되돌릴 수 없다. 빗장을 걸면 두 자리로 가는 길이 화면에서 아예 사라진다 — 등록 폼
+/// 자체는 그대로 돌아간다.
+///
+/// ```sh
+/// flutter run --dart-define=GUARD_LIVE_ADS=1
+/// ```
+const guardLiveAds = String.fromEnvironment('GUARD_LIVE_ADS') == '1';
+
 /// 미러가 사는 호스트. Basic 인증(`mirror` / `money`)이 걸려 있다.
 const mirrorHost = 'mirror-dimension-lab.pages.dev';
 

@@ -1,0 +1,203 @@
+{
+  "_note": "미러 /dabang/form/room/ 에 실제 PNG 한 장을 올린 뒤 dabang_photo_probe.js 로 잰 기준선. 실물 결과를 이것과 견주면 사진 카드가 어디에 생기는지 차이가 보인다.",
+  "_measuredOn": "미러 mirror-dimension-lab.pages.dev, 1280x900, 2026-09-20",
+  "redaction": "사진·src·파일이름·사람이 쓴 글 미수집 / 태그·클래스·data-*·aria-* 만",
+  "fileInputs": [
+    {
+      "accept": "image/*",
+      "multiple": true,
+      "path": "",
+      "parent": "body."
+    },
+    {
+      "accept": "image/jpg, image/jpeg, image/png",
+      "multiple": false,
+      "path": "",
+      "parent": "body."
+    }
+  ],
+  "bridgeExpects": {
+    "selector": "section#visual_info [class*=\"SortableContainer\"] [data-index]",
+    "matchedCount": 1,
+    "matched": [
+      {
+        "cls": "styled__Card-sc-1wpie1-3 gprsbc",
+        "settledByCurrentRule": true,
+        "aria-describedby": "DndDescribedBy-0",
+        "aria-disabled": "false",
+        "aria-roledescription": "sortable",
+        "data-index": "0",
+        "data-id": "zW4bt_4hSYP31Cb7Z0lYL",
+        "data-mirror-src": "https://s3-ap-northeast-1.amazonaws.com/"
+      }
+    ],
+    "visualInfoPresent": true,
+    "sortableInsideVisualInfo": 1,
+    "sortableAnywhere": 1
+  },
+  "cardCandidates": [
+    {
+      "tag": "div",
+      "cls": "styled__SortableContainer-sc-1wpie1-2 RucoS",
+      "path": "root > visual_info",
+      "inVisualInfo": true
+    },
+    {
+      "tag": "div",
+      "cls": "styled__Card-sc-1wpie1-3 gprsbc",
+      "path": "root > visual_info",
+      "inVisualInfo": true,
+      "aria-describedby": "DndDescribedBy-0",
+      "aria-disabled": "false",
+      "aria-roledescription": "sortable",
+      "data-index": "0",
+      "data-id": "zW4bt_4hSYP31Cb7Z0lYL",
+      "data-mirror-src": "https://s3-ap-northeast-1.amazonaws.com/"
+    }
+  ],
+  "visualInfoSkeleton": {
+    "tag": "section",
+    "cls": "styled__ScrollElement-sc-h5ond6-4 kZIHCN scroll-element",
+    "id": "visual_info",
+    "kids": [
+      {
+        "tag": "header",
+        "cls": "styled__Header-sc-h5ond6-5 dSSnTQ",
+        "kids": [
+          {
+            "tag": "h1",
+            "cls": "styled__Title-sc-h5ond6-6 fGnfnD"
+          },
+          {
+            "tag": "button",
+            "cls": "styled__TextButton-sc-4c4w1r-0 bCnYZZ",
+            "kids": [
+              {
+                "tag": "div",
+                "kids": [
+                  {
+                    "tag": "svg",
+                    "cls": "[object SVGAnimatedString]",
+                    "kids": [
+                      {
+                        "tag": "circle",
+                        "cls": "[object SVGAnimatedString]"
+                      },
+                      {
+                        "tag": "path",
+                        "cls": "[object SVGAnimatedString]"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "span",
+                    "cls": "styled__Text-sc-4c4w1r-1 hKZTiB"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "tag": "table",
+        "cls": "styled__Table-sc-h5ond6-7 iowFeN",
+        "kids": [
+          {
+            "tag": "colgroup",
+            "kids": [
+              {
+                "tag": "col"
+              },
+              {
+                "tag": "col"
+              }
+            ]
+          },
+          {
+            "tag": "tbody",
+            "kids": [
+              {
+                "tag": "tr",
+                "kids": [
+                  {
+                    "tag": "th",
+                    "kids": [
+                      {
+                        "tag": "h1",
+                        "kids": [
+                          {
+                            "tag": "span"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "td",
+                    "kids": [
+                      {
+                        "tag": "div",
+                        "cls": "styled__BtnWrap-sc-1wpie1-0 kDfbnl",
+                        "kids": [
+                          {
+                            "tag": "div"
+                          }
+                        ]
+                      },
+                      {
+                        "tag": "div",
+                        "cls": "styled__SortableContainer-sc-1wpie1-2 RucoS",
+                        "kids": [
+                          {
+                            "tag": "div",
+                            "cls": "styled__Card-sc-1wpie1-3 gprsbc",
+                            "aria-describedby": "DndDescribedBy-0",
+                            "aria-disabled": "false",
+                            "aria-roledescription": "sortable",
+                            "data-index": "0",
+                            "data-id": "zW4bt_4hSYP31Cb7Z0lYL",
+                            "data-mirror-src": "https://s3-ap-northeast-1.amazonaws.com/"
+                          }
+                        ]
+                      },
+                      {
+                        "tag": "div",
+                        "id": "DndDescribedBy-0"
+                      },
+                      {
+                        "tag": "div",
+                        "id": "DndLiveRegion-0",
+                        "aria-atomic": "true",
+                        "aria-live": "assertive"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "tag": "tr",
+                "kids": [
+                  {
+                    "tag": "td",
+                    "kids": [
+                      {
+                        "tag": "button",
+                        "cls": "styled__TextButton-sc-4c4w1r-0 gXynvB",
+                        "kids": [
+                          {
+                            "tag": "div"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

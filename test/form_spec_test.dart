@@ -452,8 +452,113 @@ setTimeout(() => {
       expect(script, contains("ul[class*=SearchList] > li"));
       expect(script, contains('[class*=AddressList]'));
       expect(script, contains('data.buildingName'));
-      expect(script, contains('filled(data.address) && !complexProperty'));
+      // 단지를 직접 고르는 쪽은 카카오 화면을 띄우지 않는다 — 그 갈림이 살아 있는가.
+      expect(script, contains('if (complexProperty) {\n      await enterComplexAddress'));
+      expect(script, contains('} else if (filled(data.address)) {'));
+      expect(script, contains('await pickAddress();'));
     }
+  });
+
+  // 실물 실측(2026-09-20): 주소를 고르면 다방이 폼을 처음 상태로 되돌린다 — 주소와
+  // 섹션이 다른 「제목」에 손으로 친 글자까지 사라졌다. 그래서 주소는 맨 뒤가 아니라
+  // 값들보다 **먼저** 앉아야 하고, 그러고도 끝에서 한 번 더 대조해야 한다.
+  test('Dabang settles the address before the other fields and reconciles last', () {
+    final script = dabangInjectionScript(
+      '{"propertyType":"오픈형 원룸","address":"서울특별시 강남구 역삼동 1","title":"제목"}',
+    );
+    final address = script.indexOf('await pickAddress();');
+    final title = script.indexOf("fill('title'");
+    final reconcile = script.indexOf('await reconcile();');
+
+    expect(address, greaterThan(0), reason: '주소를 끝까지 받는 단계가 있어야 한다');
+    expect(title, greaterThan(address), reason: '주소가 값들보다 먼저 앉아야 한다');
+    expect(reconcile, greaterThan(title), reason: '대조는 모든 입력 뒤여야 한다');
+
+    // 되돌림을 되돌리는 그물: 넣은 것마다 「다시 재는 법·다시 넣는 법」을 적어 둔다.
+    expect(script, contains('const remember = (key, el, check, redo)'));
+    expect(script, contains('const reconcile = async ()'));
+    // 값을 받고 닫히는 창(월 관리비 상세입력) 안의 칸은 적어 두지 않는다 — 닫히면
+    // 사라지는 것이 정상이라, 적어 두면 「사라졌다」는 오탐이 된다.
+    expect(script, contains("el.closest('#modal-container')"));
+    // 본 차례가 끝난 뒤 늦게 도착하는 주소도 대조를 한 번 더 부른다.
+    expect(script, contains('if (settled && !replaying)'));
+  });
+
+  /* 사진은 폼이 다 채워진 **뒤에** 붙는다.
+   *
+   * [WebViewController.runJavaScript] 는 async 어댑터의 첫 await 에서 돌아오므로,
+   * 표식이 없으면 사진 첨부가 폼 입력과 나란히 돈다. 그리고 다방은 주소를 고르는 순간
+   * 폼을 처음 상태로 되돌려 방금 올라간 사진 카드까지 쓸어 간다 — 실기기에서 「카드가
+   * 한때 1장까지 보였다가 사라졌습니다」로 끝난 것이 이것이다(2026-09-20). */
+  test('어댑터 셋 다 제 차례가 끝났음을 표식으로 알린다', () {
+    for (final script in [
+      zigbangInjectionScript('{}'),
+      dabangInjectionScript('{}'),
+      daangnInjectionScript('{}'),
+    ]) {
+      final down = script.indexOf('window.__flrFormDone = false;');
+      final up = script.indexOf('window.__flrFormDone = true;');
+      expect(down, greaterThan(0), reason: '시작할 때 앞선 시도의 표식을 내려야 한다');
+      expect(up, greaterThan(down), reason: '끝난 뒤에 세워야 한다');
+      // 오류로 빠져나온 길에도 세운다 — 반쯤 채워진 폼이라도 사진은 붙는 편이 낫다.
+      expect(up, greaterThan(script.indexOf('} catch (error)')));
+    }
+  });
+
+  // [reconcile] 은 없어진 값을 다시 넣는데, 매물유형을 다시 누르면 7행이 통째로 다시
+  // 그려진다. 그 다시 그리기가 방금 올라간 사진 카드를 쓸어 간다. 사진 카드가 생기고
+  // 사라지는 것 자체도 body 의 변화라, 막지 않으면 사진이 제가 저를 지우게 된다.
+  test('사진을 붙이는 동안 다방 어댑터는 폼을 건드리지 않는다', () {
+    final script = dabangInjectionScript('{}');
+    expect(
+      script,
+      contains(
+        'const photoBusy = () => !!window.__flrPhotos && '
+        'Date.now() < (window.__flrPhotos.until || 0);',
+      ),
+    );
+    expect(script, contains('if (photoBusy()) return;'));
+    // 사진 자리 안에서만 일어난 변화는 폼의 되돌림이 아니다.
+    expect(
+      script,
+      contains('records.every(record => spot.contains(record.target))'),
+    );
+  });
+
+  // 되돌림 감시자가 [reconcile] 을 여러 번 부른다. 부를 때마다 같은 항목을 또 빼면
+  // 검증 숫자가 0까지 내려가고 「확인할 항목」에 같은 줄이 쌓인다.
+  test('여러 번 대조해도 검증 숫자와 확인할 항목이 부풀지 않는다', () {
+    final script = dabangInjectionScript('{}');
+    expect(
+      script,
+      contains(
+        'output.verified = Math.max(0, output.verified + deducted - stuck.length);',
+      ),
+    );
+    expect(script, contains('deducted = stuck.length;'));
+    expect(script, contains('/: 넣은 값이 폼에서 사라져/.test(output.missing[i])'));
+  });
+
+  // 실물 실측(2026-09-20): 사용승인일 칸은 넣은 `20250301` 을 제 형식으로 고쳐
+  // 되돌려 준다. 글자 그대로 견주면 넣고도 실패로 읽혔다.
+  test('Dabang compares the approval date by digits and says what it read', () {
+    final script = dabangInjectionScript(
+      '{"propertyType":"오픈형 원룸","approvalDate":"2025-03-01"}',
+    );
+    expect(script, contains('const sameDigits = (got, wanted)'));
+    expect(
+      script,
+      contains('const fill = (key, locate, value, transform = v => v, same = sameText)'),
+    );
+    // 느슨한 비교는 **그 칸에만** 준다. 전부에 주면 진짜 실패가 묻힌다.
+    expect(
+      script,
+      contains("data.approvalDate, v => String(v).replace(/-/g, ''), sameDigits)"),
+    );
+    // 정의 한 번, 쓰는 곳 한 번 — 그게 전부여야 한다.
+    expect('sameDigits'.allMatches(script).length, 2);
+    // 어긋났을 때 폼이 **무엇으로 읽었는지**를 적는다. 이것이 없어 한 번 더 재야 했다.
+    expect(script, contains('」인데 폼은 「'));
   });
 
   test(

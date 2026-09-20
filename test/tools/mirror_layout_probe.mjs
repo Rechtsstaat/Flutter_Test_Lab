@@ -2,11 +2,17 @@
 // agent's thumb would find. Every URL comes from the caller, so this harness
 // cannot drift from what the app actually loads.
 //
-// Three jobs:
+// Four jobs:
 //
-//   --job=layout  install the layout script on --form and measure the CTA
-//   --job=signin  install it on --login and measure the sign-in controls
-//   --job=routes  sign in at --login, then report where each app URL lands
+//   --job=layout     install the layout script on --form and measure the CTA
+//   --job=signin     install it on --login and measure the sign-in controls
+//   --job=routes     sign in at --login, then report where each app URL lands
+//   --job=structure  sign in, open --form, and return what --script reports
+//
+// The last one runs a read-only structure probe (test/tools/*_form_probe.js)
+// against the mirror, which is the baseline the same probe's live capture gets
+// diffed against — the adapters find their fields by section id, row heading
+// and label text, and those are exactly what a live page is free to differ on.
 //
 // The first exists because greping the generated CSS cannot tell whether the
 // 등록 button is on the screen — 다방's sat 499px past the right edge while
@@ -340,6 +346,100 @@ try {
   const landed = directory(await evaluate('location.href'));
   if (landed !== directory(args.form)) {
     done({skip: 'mirror did not serve the form (landed on ' + landed + ')'});
+  }
+
+  if (job === 'structure') {
+    // No install, no scroll, no clicks — the probe only reads.
+    done({job, landed, probe: await evaluate(readFileSync(args.script, 'utf8'))});
+  }
+
+  // Drives the app's own photo bridge (lib/photo_transfer.dart) exactly as the
+  // Dart side does: install, begin, append in 96 KiB base64 chunks, commit,
+  // then poll status. The bridge is the one piece the adapter tests cannot
+  // reach — it only runs against a real file input in a real page.
+  if (job === 'bridge') {
+    const installed = await evaluate(readFileSync(args.script, 'utf8'));
+    const photo = readFileSync(args.photo);
+    const call = (method, argv = []) => evaluate(
+      `JSON.stringify(window.__flrPhotos.${method}(...${JSON.stringify(argv)}))`);
+    const began = await call('begin', [
+      {name: 'probe.png', type: 'image/png', size: photo.length, lastModified: Date.now()},
+      1,
+    ]);
+    const CHUNK = 96 * 1024;
+    let appended = null;
+    for (let at = 0; at < photo.length; at += CHUNK) {
+      appended = await call('append', [photo.subarray(at, at + CHUNK).toString('base64')]);
+    }
+    const committed = await call('commit');
+    let status = null;
+    for (let waited = 0; waited < Number(args.wait || 30000); waited += 500) {
+      await sleep(500);
+      status = JSON.parse(await call('status'));
+      if (status.ready) break;
+    }
+    done({job, landed, installed, began, appended, committed, status});
+  }
+
+  // Attaches --photo to the form's own photo input through the browser (not
+  // through the bridge), waits for the page to render its card, then runs
+  // --script over the result. This is how the mirror's photo-card DOM gets
+  // measured without an account: the bridge finds cards by a styled-components
+  // class name inside #visual_info, and only a real upload shows whether that
+  // is where the cards actually land.
+  if (job === 'photo') {
+    await send('DOM.enable');
+    const {root} = await send('DOM.getDocument', {depth: -1, pierce: true});
+    const {nodeIds} = await send('DOM.querySelectorAll', {
+      nodeId: root.nodeId, selector: 'input[type="file"]',
+    });
+    let attached = null;
+    for (const nodeId of nodeIds) {
+      const {attributes} = await send('DOM.getAttributes', {nodeId});
+      const accept = attributes[attributes.indexOf('accept') + 1];
+      if (attributes.indexOf('accept') === -1 || accept !== 'image/*') continue;
+      await send('DOM.setFileInputFiles', {nodeId, files: [args.photo]});
+      attached = nodeId;
+      break;
+    }
+    if (attached === null) done({skip: 'no multiple image/* file input on the form'});
+    await sleep(Number(args.wait || 8000));
+    done({job, landed, attached: true, probe: await evaluate(readFileSync(args.script, 'utf8'))});
+  }
+
+  // Runs a real adapter against the mirror form and reports what it published.
+  // The adapters restructure themselves around the live pages' quirks (the
+  // address step moved to the front once the live form turned out to reset
+  // itself on address selection); nothing static can tell whether the result
+  // still runs, so this drives the actual script end to end.
+  if (job === 'inject') {
+    await evaluate(`window.__flrPublished = null;
+      window.ListingResult = {postMessage: value => { window.__flrPublished = value; }};`);
+    await evaluate(readFileSync(args.script, 'utf8'));
+    const budget = Number(args.wait || 90000);
+    for (let waited = 0; waited < budget; waited += 500) {
+      await sleep(500);
+      if (await evaluate('!!window.__flrPublished')) break;
+    }
+    done({
+      job,
+      landed,
+      published: await evaluate('window.__flrPublished'),
+      // What the form actually holds at the end — the only honest scoreboard.
+      finalValues: await evaluate(`(() => {
+        const out = {};
+        for (const el of document.querySelectorAll('input, select, textarea')) {
+          if (el.type === 'hidden' || el.type === 'file') continue;
+          const name = el.name || el.getAttribute('placeholder') || el.type;
+          if (el.type === 'checkbox' || el.type === 'radio') {
+            if (el.checked) out['checked:' + name] = (out['checked:' + name] || 0) + 1;
+          } else if (el.value) {
+            out[name] = (out[name] ? out[name] + '|' : '') + String(el.value).slice(0, 40);
+          }
+        }
+        return out;
+      })()`),
+    });
   }
 
   const installed = await evaluate(readFileSync(args.script, 'utf8'));
