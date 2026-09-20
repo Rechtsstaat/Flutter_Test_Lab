@@ -31,9 +31,46 @@ ListingPlatform.daangn => PlatformStatus.paused,   // live 로 바꾸면 되살�
 `switch` 로 적혀 있어 **컴파일러가 채워야 할 곳(주소·버튼 이름·로그인 확인법·색·어댑터)을
 하나씩 짚어 줍니다.** 마지막으로 `status` 를 `live` 로 두면 화면·흐름에 저절로 들어옵니다.
 
-## 현재 상태: 직방·다방·당근 폼 주입 프로토타입
+## 현재 상태: 실물 직방·다방에 붙는 폼 주입 프로토타입
 
-현재 구현은 완성된 3사 통합 등록 앱이 아닙니다. 통합 폼의 값을 앱 내부 WebView에 표시한 **직방·다방·당근 재현(미러) 폼**에 주입하고, 입력 결과와 플랫폼이 받지 못한 항목의 사유를 확인하는 단계의 프로토타입입니다.
+앱은 이제 **실제 직방 CEO(`ceo.zigbang.com`)와 다방프로(`pro.dabangapp.com`)** 에 붙습니다. 통합 폼의 값을 앱 내부 WebView에 띄운 각 플랫폼의 실제 매물 등록 폼에 주입하고, 입력 결과와 플랫폼이 받지 못한 항목의 사유를 보여 줍니다. 등록 버튼은 여전히 사람이 누르므로, 누르면 매물이 **실제 사이트에 등록**됩니다.
+
+### 실물과 미러
+
+주소는 `lib/fields.dart` 의 `ListingPlatform.urlsOn(PlatformSite)` 한 표에 있습니다.
+
+| | 실물 (기본) | 미러 |
+|---|---|---|
+| 직방 매물 등록 | `ceo.zigbang.com/ads/oneroom/ad-item/new` | `/zigbang/form/oneroom/` |
+| 직방 광고 목록 | `ceo.zigbang.com/ads/oneroom?status=open` | `/zigbang/ads/oneroom/?status=open` |
+| 직방 로그인 | `ceo.zigbang.com/account/login/email` → `account.zigbang.com` OAuth | `/zigbang/account/login/email/` |
+| 다방 매물 등록 | `pro.dabangapp.com/form/room` | `/dabang/form/room/` |
+| 다방 광고 목록 | `pro.dabangapp.com/room/dabang-list/public` | `/dabang/room/dabang-list/public/` |
+| 다방 로그인 | `pro.dabangapp.com/login` | `/dabang/login/` |
+
+실물 경로는 2026-09-20 에 직방 CEO 의 Next.js 라우트 표와 다방프로의 react-router 번들, 그리고 로그인 안 된 요청의 실제 응답으로 확인했습니다. 실물과 미러가 다른 점은 다음과 같고, 앱은 둘 다 다룹니다.
+
+- **직방 로그인은 도메인을 건너갑니다.** 로그인 안 된 요청은 307 로 `/intro` 랜딩에 가고, 로그인은 `account.zigbang.com` 에서 받은 뒤 `/OAuth/Callback` 이 `ceo_zauth` 를 심고 돌아옵니다. 그래서 「로그인 안 됨」은 경로뿐 아니라 호스트로도 가립니다.
+- **다방프로는 한 장짜리 앱(SPA)입니다.** 로그인 안 된 `/dashboard` · `/form/room` · 광고 목록은 200 으로 껍데기를 준 뒤 랜딩 `/` 으로 **주소만** 바꿉니다. 페이지 로드가 없으므로 WebView 의 URL 변경(`onUrlChange`)으로 듣습니다. 로그인을 마치고 대시보드로 가는 것도 같은 식이라 연동 확인도 거기서 다시 합니다.
+- **다방 `login/check` 의 답 모양이 다릅니다.** 실물은 `{"code":200,"result":false}`, 미러는 `{"isLogin":false}` 입니다. 둘 다 읽습니다.
+- 연동(0011)이 로그인 화면이 아니라 **랜딩**(직방 `/intro`, 다방 `/`)에 떨어지면 한 번만 플랫폼 로그인 화면으로 넘겨 줍니다.
+- 실물 폼은 페이지 로드가 끝난 뒤 그려지므로, 어댑터는 폼의 입력란이 나타날 때까지(최대 20초) 기다렸다가 돕니다. 끝내 나타나지 않으면 「등록 폼의 입력란을 찾지 못했어요」를 확인할 항목에 올립니다.
+- 어댑터는 미러가 덧붙인 `data-mirror*` 표식에 기대지 않고, 실물 페이지 자체의 `name`·섹션 id·줄 제목·ARIA 역할로 칸을 찾습니다.
+
+**미러로 돌리려면** 빌드할 때 `--dart-define=PLATFORM_SITE=mirror` 를 줍니다. 계정 없이 어댑터를 재 보거나 통합 테스트를 돌릴 때 씁니다. 헤드리스 크롬 하네스(`test/mirror_browser_test.dart`)는 늘 미러를 잽니다.
+
+```bash
+flutter run --dart-define=PLATFORM_SITE=mirror
+```
+
+**아직 실물에서 확인하지 못한 것** — 실제 중개사 계정이 없어 로그인 뒤 화면은 재 보지 못했습니다. 실물 로그인 화면(직방 `account.zigbang.com`, 다방 `/login`)이 앱 안에서 뜨고 폰 너비에 맞는 것, 로그인 안 된 요청이 어디로 가는지까지는 확인했습니다. 계정으로 처음 돌려 볼 때 볼 곳은 다음과 같습니다.
+
+- 폼의 칸 이름·줄 제목이 미러 수집 때와 같은지 (다르면 「확인할 항목」에 누락이 몰려 나옵니다)
+- 등록·종료 버튼 글자(직방 「매물 등록 완료」·「매물 종료하기」, 다방 「등록 완료」·「광고 종료」)
+- 로그인 뒤 직방 `ceo_zauth` 쿠키가 `document.cookie` 에 보이는지, 다방 `login/check` 의 `result` 가 `true` 가 되는지
+- 다방 사진 첨부 칸(`section#visual_info`)과 업로드 완료 표시
+
+아래의 동작 설명은 미러에서 확인한 것입니다.
 
 현재 확인할 수 있는 범위:
 
@@ -105,7 +142,8 @@ ListingPlatform.daangn => PlatformStatus.paused,   // live 로 바꾸면 되살�
 
 현재 포함되지 않은 범위:
 
-- 실제 직방 사이트 로그인 또는 실제 매물 등록
+- 실물 계정으로 로그인한 뒤의 화면 검증 (위 「아직 실물에서 확인하지 못한 것」)
+- 당근의 실물 연결 — 실물 중개사 화면을 수집하지 못해 내려 둔 상태이고, 주소는 미러를 가리킵니다
 - 플랫폼 공식 API 연동, 직방 사진 자동 업로드, CAPTCHA 처리
 - 다방 건축물대장 조회 결과의 자동 선택·적용 및 비목별 관리비 금액 변환
 - 운영 환경의 장애 복구 및 등록 결과 동기화

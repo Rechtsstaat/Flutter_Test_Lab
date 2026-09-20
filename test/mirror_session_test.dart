@@ -50,15 +50,36 @@ void main() {
   });
 
   group('platform URLs', () {
-    test('every page 0011 and 2022 open lives on the one mirror host', () {
-      for (final platform in ListingPlatform.values) {
-        final host = Uri.parse(platform.formUrl).host;
+    test("every page 0011 and 2022 open lives on the form's host", () {
+      for (final site in PlatformSite.values) {
+        for (final platform in ListingPlatform.values) {
+          final urls = platform.urlsOn(site);
+          for (final url in [urls.login, urls.dashboard, urls.listings]) {
+            expect(Uri.parse(url).host, urls.host, reason: url);
+            expect(platform.siteOf(Uri.parse(url)), isNotNull, reason: url);
+          }
+        }
+      }
+    });
+
+    test('the app talks to the live 직방 CEO and 다방프로 by default', () {
+      expect(PlatformSite.active, PlatformSite.live);
+      expect(
+        Uri.parse(ListingPlatform.zigbang.formUrl).host,
+        'ceo.zigbang.com',
+      );
+      expect(
+        Uri.parse(ListingPlatform.dabang.formUrl).host,
+        'pro.dabangapp.com',
+      );
+      for (final platform in livePlatforms) {
         for (final url in [
+          platform.formUrl,
           platform.loginUrl,
           platform.dashboardUrl,
           platform.listingsUrl,
         ]) {
-          expect(Uri.parse(url).host, host, reason: url);
+          expect(url, isNot(contains(mirrorHost)), reason: url);
         }
       }
     });

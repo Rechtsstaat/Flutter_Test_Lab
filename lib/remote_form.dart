@@ -1,7 +1,28 @@
-/// The JavaScript 한방 runs inside each mirror: the Kakao postcode bridge, the
-/// per-platform adapters, and the frame script that picks a Kakao result.
-/// `MirrorSession` decides when each one runs.
+/// The JavaScript 한방 runs inside each platform page: the Kakao postcode
+/// bridge, the per-platform adapters, and the frame script that picks a Kakao
+/// result. `MirrorSession` decides when each one runs.
+///
+/// The adapters were written against the mirror, which was captured from the
+/// live pages, so they find fields by what the live page itself carries —
+/// `name` attributes, section ids, row headings, ARIA roles. Nothing here may
+/// depend on the `data-mirror*` / `data-flr*` markup the mirror adds on top.
 library;
+
+import 'dart:convert';
+
+import 'fields.dart';
+
+/// Answers `true` once the platform's listing form has rendered its own
+/// fields. The live forms draw themselves after the page load finishes (직방 is
+/// Next.js, 다방프로 a single-page app), so the adapter waits for this first.
+String formReadyScript(ListingPlatform platform) {
+  final selector = switch (platform) {
+    ListingPlatform.zigbang => '[name="sizeM2"], [name="title"]',
+    ListingPlatform.dabang => '#room_info th, #trade_info th',
+    ListingPlatform.daangn => '#image-upload',
+  };
+  return '!!document.querySelector(${jsonEncode(selector)})';
+}
 
 String postcodeBridgeScript(String query) =>
     '''
@@ -167,8 +188,8 @@ String zigbangInjectionScript(String payload) =>
     heating: '난방 방식: 직방 원룸 폼에 입력란이 없습니다.',
     lh: 'LH 전세임대 여부: 직방 원룸 폼에 입력란이 없습니다.',
     rooms: '방 개수: 직방 원룸 폼은 방 구조로 방 수를 정하며 별도 방 개수 입력란이 없습니다.',
-    unknownFeeReason: '확인 불가 법정 사유: 직방 원룸 미러의 관리비 방식에는 확인 불가 분기가 없습니다.',
-    photoCount: '사진: 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다. 통합 폼에서 선택한 사진은 다방·당근 미러에 자동 첨부할 수 있습니다.'
+    unknownFeeReason: '확인 불가 법정 사유: 직방 원룸 폼의 관리비 방식에는 확인 불가 분기가 없습니다.',
+    photoCount: '사진: 직방은 아직 사진 자동 첨부를 지원하지 않아 직접 올려야 합니다. 통합 폼에서 선택한 사진은 다방에 자동 첨부됩니다.'
   };
   const esc = s => (window.CSS && CSS.escape) ? CSS.escape(String(s)) : String(s).replace(/[^a-zA-Z0-9_-]/g, '\\\\\$&');
   const find = name => document.querySelector('[name="' + esc(name) + '"], #' + esc(name) + ', [data-flr-key="' + esc(name) + '"]');
@@ -286,7 +307,7 @@ String zigbangInjectionScript(String payload) =>
   // true 를 준다. 그래서 「입력됨」은 곧 「확인됨」이다.
   const mark = (key, ok) => {
     if (ok) { output.applied++; output.verified++; }
-    else output.missing.push(key + ': 미러의 대상 DOM을 찾거나 선택하지 못했습니다.');
+    else output.missing.push(key + ': 폼에서 대상 입력란을 찾거나 선택하지 못했습니다.');
   };
   const note = message => { if (!output.unsupported.includes(message)) output.unsupported.push(message); };
   const publish = () => window.ListingResult.postMessage(JSON.stringify(output));
@@ -338,7 +359,7 @@ String zigbangInjectionScript(String payload) =>
     mark('shortTerm', await check('isShortTerm', data.shortTerm === true));
     if (data.loan === '없음') mark('loan', await clickText('noLoan', '융자금 없음'));
     else if (data.loan === '30%이하' || data.loan === '융자금 30%이하') mark('loan', await clickText('loanUnder30', '융자금 30%이하'));
-    else if (data.loan !== undefined && data.loan !== null && data.loan !== '') output.unsupported.push('융자금 ' + data.loan + ': 직방 원룸 미러는 융자금 없음 또는 30% 이하만 선택할 수 있어 임의 금액을 자동 변환하지 않았습니다.');
+    else if (data.loan !== undefined && data.loan !== null && data.loan !== '') output.unsupported.push('융자금 ' + data.loan + ': 직방 원룸 폼는 융자금 없음 또는 30% 이하만 선택할 수 있어 임의 금액을 자동 변환하지 않았습니다.');
     mark('noManagementFee', await check('no-manage-cost', data.noManagementFee === true));
     if (data.noManagementFee !== true) { mark('manageMethod', await clickLabel('관리비 부과 방식', data.manageMethod === '기타 부과' ? '기타' : data.manageMethod)); await sleep(400); }
     if (data.manageMethod === '정액 관리비' && data.noManagementFee !== true) { mark('manageBasis', await choose(names.manageBasis, ({'3개월 평균 관리비':'최근 3개월 관리비 평균','1년 평균 관리비':'최근 1년 관리비 평균','기타 직접 입력':'직접 입력'})[data.manageBasis] || data.manageBasis)); input('managementFee', data.managementFee, v => String(Number(v) * 10000)); }
@@ -369,7 +390,7 @@ String zigbangInjectionScript(String payload) =>
         if (!source) continue;
         const masterValue = data.manageDetail[detailKeys[source]];
         if (!masterValue) {
-          output.unsupported.push('관리비 세부 ' + detailKeys[source] + ': 통합 폼 값이 없어 미러에 입력하지 않았습니다.');
+          output.unsupported.push('관리비 세부 ' + detailKeys[source] + ': 통합 폼 값이 없어 입력하지 않았습니다.');
           continue;
         }
         mark('manageDetail.' + detailKeys[source], await choose(el.name, masterValue));
@@ -386,9 +407,9 @@ String zigbangInjectionScript(String payload) =>
     mark('loanAvailable', await check('itemConditions.loanLease', data.loanAvailable === '가능')); mark('petAllowed', await check('itemConditions.pet', data.petAllowed === '가능'));
     const optionLabel = [...document.querySelectorAll('label')].find(label => label.textContent.trim() === '옵션');
     const optionScope = optionLabel?.parentElement?.parentElement || document;
-    for (const option of (data.appliances || [])) { const button = [...optionScope.querySelectorAll('button')].find(b => b.textContent.trim() === option); if (button) { press(button); if (await waitFor(() => selectedButton(button))) { output.applied++; output.verified++; } else output.missing.push('appliances.' + option + ': 미러에서 선택 상태를 확인하지 못했습니다.'); } else output.unsupported.push('가전·가구 옵션 ' + option + ': 직방 원룸 미러에 대응 옵션이 없습니다.'); }
-    const conditionIds = {'CCTV':'itemConditions.cctv','테라스':'itemConditions.terrace','전기차 충전시설':'itemConditions.evStation'}; for (const item of (data.facilities || [])) { if (conditionIds[item]) { if (await check(conditionIds[item], true)) { output.applied++; output.verified++; } else output.missing.push('facilities.' + item + ': 미러에서 선택 상태를 확인하지 못했습니다.'); } else output.unsupported.push('보안 및 시설 옵션 ' + item + ': 직방 원룸 미러에 대응 옵션이 없습니다.'); }
-    if (data.moveInType === '즉시 입주') mark('moveInType', await check('moveInImmediately', true)); else if (data.moveInType === '날짜 지정') { mark('moveInType', await check('moveInImmediately', false)); input('moveInDate', data.moveInDate); } else output.unsupported.push('입주 방식 협의 가능: 직방 원룸 미러는 즉시 입주 또는 날짜 선택만 지원합니다.');
+    for (const option of (data.appliances || [])) { const button = [...optionScope.querySelectorAll('button')].find(b => b.textContent.trim() === option); if (button) { press(button); if (await waitFor(() => selectedButton(button))) { output.applied++; output.verified++; } else output.missing.push('appliances.' + option + ': 폼에서 선택 상태를 확인하지 못했습니다.'); } else output.unsupported.push('가전·가구 옵션 ' + option + ': 직방 원룸 폼에 대응 옵션이 없습니다.'); }
+    const conditionIds = {'CCTV':'itemConditions.cctv','테라스':'itemConditions.terrace','전기차 충전시설':'itemConditions.evStation'}; for (const item of (data.facilities || [])) { if (conditionIds[item]) { if (await check(conditionIds[item], true)) { output.applied++; output.verified++; } else output.missing.push('facilities.' + item + ': 폼에서 선택 상태를 확인하지 못했습니다.'); } else output.unsupported.push('보안 및 시설 옵션 ' + item + ': 직방 원룸 폼에 대응 옵션이 없습니다.'); }
+    if (data.moveInType === '즉시 입주') mark('moveInType', await check('moveInImmediately', true)); else if (data.moveInType === '날짜 지정') { mark('moveInType', await check('moveInImmediately', false)); input('moveInDate', data.moveInDate); } else output.unsupported.push('입주 방식 협의 가능: 직방 원룸 폼는 즉시 입주 또는 날짜 선택만 지원합니다.');
     if (data.moveInNegotiable === true) input('moveInNegotiable', '협의 가능');
     input('title', data.title); input('description', data.description); input('privateMemo', data.privateMemo); input('ownerPhone', data.ownerPhone);
     for (const message of (window.__flrPostcode ? window.__flrPostcode.notes : [])) note(message);
@@ -404,7 +425,7 @@ String zigbangInjectionScript(String payload) =>
         if (!window.__flrZigbangAddressWatch) {
           const multiUnit = data.propertyType === '다가구주택' ? '예' : '아니요';
           window.__flrZigbangAddressWatch = new MutationObserver(() => {
-            const dialog = [...document.querySelectorAll('[data-mirror="modal"] [role="dialog"]')]
+            const dialog = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')]
                 .find(box => box.textContent.includes('소재지 공개 확인'));
             if (!dialog) return;
             const answer = [...dialog.querySelectorAll('button')]
@@ -687,7 +708,8 @@ String dabangInjectionScript(String payload) =>
         else if (filled(data.manageBasis)) note('관리비 부과 기준 ' + data.manageBasis + ': 다방 상세입력 창에 대응하는 기준이 없습니다.');
       }
       if (method === '기타부과' && filled(data.otherFeeReason)) {
-        await select('otherFeeReason', () => box.querySelector('[data-mirror-group="feeKind"] select'), {
+        await select('otherFeeReason', () => [...box.querySelectorAll('select')]
+            .find(el => [...el.options].some(option => option.textContent.includes('관리규약 등에 따라 부과'))), {
           '관리규약에 따라 부과': '관리규약 등에 따라 부과',
           '면적 및 세대별 부과': '공용 관리비는 면적/세대별로 부과하고 사용료는 사용량에 따른 부과',
           '전체 세대 균등 부과': '전체 사용량을 세대수로 나누어 부과',

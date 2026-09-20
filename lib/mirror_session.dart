@@ -14,16 +14,11 @@ import 'mobile_layout.dart';
 import 'photo_transfer.dart';
 import 'remote_form.dart';
 
-/// The mirror serves `.../oneroom/index.html` as a 308 to `.../oneroom/`, so
-/// the URL that finishes never equals the configured one. Comparing the
-/// directory form keeps both spellings pointing at one page.
-String mirrorDirectory(Uri uri) {
-  var path = uri.path;
-  if (path.endsWith('index.html')) {
-    path = path.substring(0, path.length - 'index.html'.length);
-  }
-  return path.endsWith('/') ? path : '$path/';
-}
+/// The mirror serves `.../oneroom/index.html` as a 308 to `.../oneroom/`, and
+/// the live sites drop the trailing slash, so the URL that finishes never
+/// equals the configured one. Comparing the directory form keeps every
+/// spelling pointing at one page.
+String mirrorDirectory(Uri uri) => pageDirectory(uri);
 
 /// One platform page living inside a native 한방 screen.
 ///
@@ -52,7 +47,9 @@ class MirrorPage extends ChangeNotifier {
     controller.setNavigationDelegate(
       NavigationDelegate(
         onHttpAuthRequest: (request) {
-          if (request.host == initialUrl.host) {
+          // Only the mirror sits behind Basic auth. A live platform asking for
+          // it is not something 한방 has credentials for.
+          if (request.host == mirrorHost && initialUrl.host == mirrorHost) {
             request.onProceed(
               const WebViewCredential(user: 'mirror', password: 'money'),
             );
@@ -73,6 +70,9 @@ class MirrorPage extends ChangeNotifier {
           fail('페이지가 응답하지 않아요 (HTTP $code)');
         },
         onPageFinished: _pageFinished,
+        // 다방프로는 한 장짜리 앱이라 로그인으로 되돌려 보내는 것도, 로그인 뒤 대시보드로
+        // 가는 것도 페이지 로드 없이 **주소만** 바꾼다. 그것은 여기로만 들린다.
+        onUrlChange: (change) => _urlChanged(change.url),
       ),
     );
     controller.loadRequest(url);
@@ -157,6 +157,22 @@ class MirrorPage extends ChangeNotifier {
     if (_disposed) return;
     await onPage(uri);
   }
+
+  Future<void> _urlChanged(String? url) async {
+    if (_disposed || url == null) return;
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    if (leavesOnSignedOut && platform.isSignedOut(uri)) {
+      fail(signInLost(platform));
+      return;
+    }
+    await onRoute(uri);
+  }
+
+  /// Called when the page's URL changes without (or before) a page load — a
+  /// single-page app moving between its own screens.
+  @protected
+  Future<void> onRoute(Uri url) async {}
 
   void _pressed(JavaScriptMessage message) {
     if (_disposed) return;
@@ -254,6 +270,12 @@ class MirrorSession extends MirrorPage {
   String? photoStatus;
   String? photoFailure;
 
+  /// Set when the form's fields never showed up — the page may have changed.
+  String? formNotice;
+
+  /// How long a live form gets to render its fields after the page loads.
+  static const formReadyTimeout = Duration(seconds: 20);
+
   /// The adapter reported and the photos settled: the form is as full as 한방
   /// can make it, and the rest is the agent's.
   bool get filled => _resultIn && _photosDone;
@@ -262,7 +284,12 @@ class MirrorSession extends MirrorPage {
   bool get isSettled => failure != null || pressedLabel != null || filled;
 
   /// Things the agent has to fix in the form before 등록 will go through.
-  List<String> get blockers => [...missing, ...violations, ?photoFailure];
+  List<String> get blockers => [
+    ?formNotice,
+    ...missing,
+    ...violations,
+    ?photoFailure,
+  ];
 
   /// Everything worth showing, blockers first.
   List<String> get reasons => [...blockers, ...unsupported, ...photoNotes];
@@ -312,6 +339,16 @@ class MirrorSession extends MirrorPage {
     filling = true;
     status = '${platform.label}에 입력하는 중…';
     notifyListeners();
+    // 실물 폼은 페이지 로드가 끝난 뒤에 그려진다(직방 Next.js, 다방 SPA). 어댑터가 빈
+    // 화면을 훑지 않도록 폼의 뼈대가 뜰 때까지 기다린다. 그사이 로그인 화면으로
+    // 되돌려졌다면 [_urlChanged] 가 이미 끝을 냈다.
+    if (!await _formReady()) {
+      if (failure != null) return;
+      formNotice =
+          '${platform.label} 등록 폼의 입력란을 찾지 못했어요. 화면 구성이 바뀌었을 수 있어 '
+          '자동 입력이 일부만 됐을 수 있습니다.';
+    }
+    if (failure != null || _disposed) return;
     final address = '${values['address'] ?? ''}';
     final kakao = platform.usesKakaoPostcode;
     picksAddress = kakao && address.isNotEmpty
@@ -340,6 +377,23 @@ class MirrorSession extends MirrorPage {
       status = '자동 입력 JavaScript 오류: $error';
       fail('자동 입력을 시작하지 못했어요');
     }
+  }
+
+  /// Polls for [formReadyScript] until the form's own fields exist.
+  Future<bool> _formReady() async {
+    final probe = formReadyScript(platform);
+    final until = DateTime.now().add(formReadyTimeout);
+    while (!_disposed && failure == null) {
+      try {
+        final ready = await controller.runJavaScriptReturningResult(probe);
+        if (ready == true || ready.toString() == 'true') return true;
+      } catch (_) {
+        // A page mid-navigation answers nothing; ask again.
+      }
+      if (DateTime.now().isAfter(until)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
+    return false;
   }
 
   Future<void> _transferPhotos() async {
@@ -446,10 +500,26 @@ class MirrorLogin extends MirrorPage {
     controller.addJavaScriptChannel('SessionProbe', onMessageReceived: _probed);
   }
 
+  /// 랜딩에서 로그인 화면으로 한 번 넘겼는가. 한 번만 넘긴다 — 사람이 랜딩으로 돌아가
+  /// 둘러보는 것까지 막으면 안 된다.
+  bool _sentToLogin = false;
+
   @override
   Future<void> onPage(Uri url) async {
     markLoaded();
     onLoginScreen = platform.isSignedOut(url);
+    // 실물은 로그인 안 된 대시보드 요청을 로그인 화면이 아니라 **랜딩**으로 보낸다
+    // (직방 `/intro`, 다방프로 `/`). 거기서 「로그인」을 찾아 누르게 하지 않고 플랫폼
+    // 자신의 로그인 화면을 바로 연다 — 여전히 아이디·비밀번호는 플랫폼 화면에 들어간다.
+    if (onLoginScreen &&
+        platform.hasLogin &&
+        !_sentToLogin &&
+        !platform.urls.isLoginScreen(url)) {
+      _sentToLogin = true;
+      notifyListeners();
+      await controller.loadRequest(Uri.parse(platform.loginUrl));
+      return;
+    }
     if (!platform.hasLogin) {
       // 로그인이 없는 플랫폼은 화면이 떴다는 것 말고 볼 것이 없다.
       _settle(true, SessionEvidence.page);
@@ -461,6 +531,14 @@ class MirrorLogin extends MirrorPage {
     } catch (_) {
       _settle(!onLoginScreen, SessionEvidence.page);
     }
+  }
+
+  /// 다방프로는 로그인을 마치면 페이지를 새로 싣지 않고 주소만 대시보드로 바꾼다.
+  /// 그 순간 다시 물어야 연동이 끝난 줄 안다.
+  @override
+  Future<void> onRoute(Uri url) async {
+    if (!loaded || !platform.hasLogin) return;
+    await onPage(url);
   }
 
   void _probed(JavaScriptMessage message) {
@@ -523,13 +601,14 @@ String sessionProbeScript(ListingPlatform platform) {
       return '$open window.SessionProbe.postMessage(String('
           'document.cookie.split("; ").some(c => c.startsWith($name))));$close';
     // 다방: auth_key 가 HttpOnly 라 JS 로는 볼 수 없다. 플랫폼에 직접 묻는 수밖에 없고,
-    // 답은 **코드가 아니라 본문**에 있다 — 로그인 전에도 200 이 온다.
+    // 답은 **코드가 아니라 본문**에 있다 — 로그인 전에도 200 이 온다. 실물은
+    // `{"code":200,"result":false}` 처럼 `result` 에, 미러는 `isLogin` 에 싣는다.
     case SessionCheck.platformAsks:
       final ask = jsonEncode(platform.sessionCheckPath);
       return '(() => {\n'
           "  fetch($ask, {credentials: 'same-origin', headers: {accept: 'application/json'}})\n"
           '    .then(response => response.ok ? response.json() : Promise.reject(response.status))\n'
-          '    .then(body => { window.SessionProbe.postMessage(String(!!body.isLogin)); })\n'
+          "    .then(body => { window.SessionProbe.postMessage(String(typeof body.isLogin === 'boolean' ? body.isLogin : body.result === true)); })\n"
           "    .catch(() => { try { window.SessionProbe.postMessage('unknown'); } catch (_) {} });\n"
           '})();';
     case SessionCheck.none:
@@ -663,7 +742,7 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
       canPop: false,
       onPopInvokedWithResult: _handleBack,
       child: Scaffold(
-        appBar: AppBar(title: Text('${widget.platform.label} 미러 입력')),
+        appBar: AppBar(title: Text('${widget.platform.label} 매물 입력')),
         body: Column(
           children: [
             Container(

@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:image_picker/image_picker.dart';
 
+import 'fields.dart';
+
 const maxListingPhotoBytes = 30 * 1024 * 1024;
 
 /// Read only the header here. The full image is streamed when transferring it.
@@ -50,14 +52,14 @@ const _validatedPhotoTypes = {
   'image/avif',
 };
 
-/// A mirror form whose own upload handler receives the listing photos.
+/// A platform form whose own upload handler receives the listing photos.
 ///
 /// Each target tells the shared bridge where its photo input is, which nodes
 /// are its photo cards and when a card has finished uploading.
 enum PhotoTarget {
   dabang(
     label: '다방',
-    formPath: '/dabang/form/room/',
+    platform: ListingPlatform.dabang,
     acceptedTypes: _validatedPhotoTypes,
     locators: r'''
   // The mirror can render this input outside the expected section and gives it
@@ -80,7 +82,7 @@ enum PhotoTarget {
   ),
   daangn(
     label: '당근',
-    formPath: '/daangn/form/article/',
+    platform: ListingPlatform.daangn,
     // The Daangn mirror drops any file whose type is not in its accept list.
     acceptedTypes: {'image/png', 'image/jpeg', 'image/gif', 'image/webp'},
     locators: r'''
@@ -104,13 +106,23 @@ enum PhotoTarget {
 
   const PhotoTarget({
     required this.label,
-    required this.formPath,
+    required this.platform,
     required this.acceptedTypes,
     required this.locators,
   });
 
   final String label;
-  final String formPath;
+  final ListingPlatform platform;
+
+  /// The form pages this bridge may run on — the live form and the mirror's,
+  /// as `[host, path]` pairs.
+  List<List<String>> get formPages => [
+    for (final site in PlatformSite.values)
+      [
+        platform.urlsOn(site).host,
+        pageDirectory(Uri.parse(platform.urlsOn(site).form)),
+      ],
+  ];
 
   /// MIME types this mirror's upload handler keeps. Other photos are skipped
   /// with a reason instead of failing the whole transfer.
@@ -128,8 +140,8 @@ String listingPhotoBridgeScript(PhotoTarget target) =>
 (() => {
   try {
   const LABEL = ${jsonEncode(target.label)};
-  if (location.hostname !== 'mirror-dimension-lab.pages.dev' ||
-      !location.pathname.startsWith(${jsonEncode(target.formPath)})) throw new Error(LABEL + ' 미러 등록 폼이 아닙니다.');
+  const here = location.pathname.endsWith('/') ? location.pathname : location.pathname + '/';
+  if (!${jsonEncode(target.formPages)}.some(([host, path]) => location.hostname === host && here.startsWith(path))) throw new Error(LABEL + ' 등록 폼이 아닙니다.');
 ${target.locators}$_photoBridgeBody''';
 
 const _photoBridgeBody = r'''
@@ -258,7 +270,7 @@ Future<List<String>> transferListingPhotos({
           .map((type) => type.split('/').last.toUpperCase())
           .join('·');
       skipped.add(
-        '${index + 1}번 사진 (${photo.name}): $label 미러는 $kinds 사진만 받아 '
+        '${index + 1}번 사진 (${photo.name}): $label 폼은 $kinds 사진만 받아 '
         '${mime.split('/').last.toUpperCase()} 사진은 첨부하지 않았습니다. 화면에서 직접 올려 주세요.',
       );
     }
@@ -319,7 +331,7 @@ Future<List<String>> transferListingPhotos({
           if (state['ready'] == true) break;
           if (watch.elapsed >= timeout) {
             throw StateError(
-              '$label 사진 카드의 처리 완료를 확인하지 못했습니다. 현재 ${state['count']}장입니다. 사진 형식 또는 미러 오류를 확인해 주세요.',
+              '$label 사진 카드의 처리 완료를 확인하지 못했습니다. 현재 ${state['count']}장입니다. 사진 형식 또는 플랫폼 오류를 확인해 주세요.',
             );
           }
           await Future<void>.delayed(const Duration(milliseconds: 250));

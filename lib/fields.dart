@@ -29,6 +29,92 @@ enum SessionCheck {
   none,
 }
 
+/// 한방이 붙는 사이트.
+///
+/// 앱은 **실물**([live])에 붙는다. [mirror] 는 실물을 떠 온 재현 사이트로, 계정 없이
+/// 어댑터를 재 보거나 통합 테스트를 돌릴 때만 쓴다:
+///
+/// ```sh
+/// flutter run --dart-define=PLATFORM_SITE=mirror
+/// ```
+enum PlatformSite {
+  live,
+  mirror;
+
+  static const PlatformSite active =
+      String.fromEnvironment('PLATFORM_SITE') == 'mirror'
+      ? PlatformSite.mirror
+      : PlatformSite.live;
+}
+
+/// 미러가 사는 호스트. Basic 인증(`mirror` / `money`)이 걸려 있다.
+const mirrorHost = 'mirror-dimension-lab.pages.dev';
+
+/// 한 사이트에서 한 플랫폼이 쓰는 주소들.
+class PlatformUrls {
+  const PlatformUrls({
+    required this.root,
+    required this.form,
+    required this.dashboard,
+    required this.login,
+    required this.listings,
+    this.signedOutPaths = const [],
+    this.signedOutExactPaths = const [],
+    this.signedOutHosts = const [],
+    this.sessionCheckPath = '',
+  });
+
+  /// 이 호스트에서 이 플랫폼 몫인 경로의 머리. 실물은 호스트 전체(`/`), 미러는 한
+  /// 호스트를 셋이 나눠 쓰므로 `/zigbang/` 처럼 갈린다.
+  final String root;
+  final String form;
+  final String dashboard;
+  final String login;
+  final String listings;
+
+  /// 로그인 안 된 요청이 튕겨 가는 경로 (같은 호스트 안, 앞부분 일치).
+  final List<String> signedOutPaths;
+
+  /// 앞부분이 아니라 **그 경로 자체**일 때만 「로그인 안 됨」인 곳. 다방프로의 랜딩은
+  /// `/` 라서 앞부분으로 견주면 모든 페이지가 걸린다.
+  final List<String> signedOutExactPaths;
+
+  /// 로그인 화면이 **다른 도메인**에 있는 경우 그 호스트 (직방 account.zigbang.com).
+  final List<String> signedOutHosts;
+
+  final String sessionCheckPath;
+
+  String get host => Uri.parse(form).host;
+
+  /// [url] 이 이 사이트에서 이 플랫폼의 페이지인가.
+  bool owns(Uri url) => url.host == host && pageDirectory(url).startsWith(root);
+
+  /// [url] 이 「로그인하라」는 화면인가.
+  bool isSignedOut(Uri url) =>
+      signedOutHosts.contains(url.host) ||
+      (url.host == host &&
+          (signedOutPaths.any((path) => url.path.startsWith(path)) ||
+              signedOutExactPaths.any(
+                (path) => pageDirectory(url) == pageDirectory(Uri(path: path)),
+              )));
+
+  /// [url] 이 아이디·비밀번호를 받는 **로그인 화면 자체**인가 (랜딩이 아니라).
+  bool isLoginScreen(Uri url) =>
+      signedOutHosts.contains(url.host) ||
+      (url.host == host &&
+          pageDirectory(url).startsWith(pageDirectory(Uri.parse(login))));
+}
+
+/// `.../oneroom/index.html` · `.../oneroom` · `.../oneroom/` 을 한 페이지로 읽는다.
+/// 미러는 `index.html` 을 디렉터리로 308 을 보내고, 실물은 끝의 `/` 를 떼고 쓴다.
+String pageDirectory(Uri uri) {
+  var path = uri.path;
+  if (path.endsWith('index.html')) {
+    path = path.substring(0, path.length - 'index.html'.length);
+  }
+  return path.endsWith('/') ? path : '$path/';
+}
+
 extension ListingPlatformConfig on ListingPlatform {
   String get label => switch (this) {
     ListingPlatform.zigbang => '직방',
@@ -36,49 +122,96 @@ extension ListingPlatformConfig on ListingPlatform {
     ListingPlatform.daangn => '당근',
   };
 
-  String get formUrl => switch (this) {
-    ListingPlatform.zigbang =>
-      'https://mirror-dimension-lab.pages.dev/zigbang/form/oneroom/',
-    ListingPlatform.dabang =>
-      'https://mirror-dimension-lab.pages.dev/dabang/form/room/',
-    ListingPlatform.daangn =>
-      'https://mirror-dimension-lab.pages.dev/daangn/form/article/',
+  /// 지금 붙어 있는 사이트의 주소들. 기본은 **실물**이다 — [PlatformSite.active].
+  PlatformUrls get urls => urlsOn(PlatformSite.active);
+
+  /// [site] 에서 이 플랫폼이 쓰는 주소들.
+  ///
+  /// 실물 주소는 2026-09-20 에 각 사이트의 라우트 표(직방 CEO 의 Next.js 번들,
+  /// 다방프로의 react-router 번들)와 로그인 안 된 요청의 응답으로 확인했다. 미러는
+  /// 실물을 한 호스트 아래 `/zigbang/` · `/dabang/` · `/daangn/` 으로 펴 놓은 것이라
+  /// 경로가 1:1 로 대응한다 (직방 폼만 미러가 `/form/oneroom/` 으로 줄여 적었다).
+  PlatformUrls urlsOn(PlatformSite site) => switch ((this, site)) {
+    // 직방 CEO. 로그인 안 된 요청은 전부 307 로 `/intro` 에 간다. 로그인은
+    // `/account/login/email` 이 account.zigbang.com OAuth 로 **도메인을 건너가서**
+    // 받고, 끝나면 `/OAuth/Callback` 이 `ceo_zauth` 를 심고 돌아온다.
+    (ListingPlatform.zigbang, PlatformSite.live) => const PlatformUrls(
+      root: '/',
+      form: 'https://ceo.zigbang.com/ads/oneroom/ad-item/new',
+      dashboard: 'https://ceo.zigbang.com/dashboard',
+      login: 'https://ceo.zigbang.com/account/login/email',
+      listings: 'https://ceo.zigbang.com/ads/oneroom?status=open',
+      signedOutPaths: ['/intro', '/account/login', '/error/401'],
+      signedOutHosts: ['account.zigbang.com'],
+    ),
+    // 다방프로. 한 장짜리 앱(SPA)이라 로그인 안 된 요청도 200 으로 껍데기를 주고,
+    // 그 안에서 랜딩 `/` 로 **주소만** 바꾼다 — 페이지 로드가 아니라 URL 변경으로 온다
+    // (`/dashboard` · `/form/room` · `/room/dabang-list/public` 모두 실측).
+    (ListingPlatform.dabang, PlatformSite.live) => const PlatformUrls(
+      root: '/',
+      form: 'https://pro.dabangapp.com/form/room',
+      dashboard: 'https://pro.dabangapp.com/dashboard',
+      login: 'https://pro.dabangapp.com/login',
+      listings: 'https://pro.dabangapp.com/room/dabang-list/public',
+      signedOutPaths: ['/login', '/intro'],
+      signedOutExactPaths: ['/'],
+      sessionCheckPath: '/api/v2/user/login/check',
+    ),
+    // 당근은 실물 중개사 화면을 아직 수집하지 못해 내려 둔 상태다([status]).
+    // 실물 주소를 모르니 지어내지 않고 미러를 그대로 가리킨다.
+    (ListingPlatform.daangn, PlatformSite.live) => urlsOn(PlatformSite.mirror),
+    (ListingPlatform.zigbang, PlatformSite.mirror) => const PlatformUrls(
+      root: '/zigbang/',
+      form: 'https://$mirrorHost/zigbang/form/oneroom/',
+      dashboard: 'https://$mirrorHost/zigbang/',
+      login: 'https://$mirrorHost/zigbang/account/login/email/',
+      listings: 'https://$mirrorHost/zigbang/ads/oneroom/?status=open',
+      signedOutPaths: ['/zigbang/intro', '/zigbang/account/login'],
+    ),
+    (ListingPlatform.dabang, PlatformSite.mirror) => const PlatformUrls(
+      root: '/dabang/',
+      form: 'https://$mirrorHost/dabang/form/room/',
+      dashboard: 'https://$mirrorHost/dabang/',
+      login: 'https://$mirrorHost/dabang/login/',
+      listings: 'https://$mirrorHost/dabang/room/dabang-list/public/',
+      signedOutPaths: ['/dabang/login'],
+      sessionCheckPath: '/dabang/api/v2/user/login/check',
+    ),
+    // 당근 미러에는 로그인이 없어 중개소 홈이 곧 시작점이다.
+    (ListingPlatform.daangn, PlatformSite.mirror) => const PlatformUrls(
+      root: '/daangn/',
+      form: 'https://$mirrorHost/daangn/form/article/',
+      dashboard: 'https://$mirrorHost/daangn/',
+      login: 'https://$mirrorHost/daangn/',
+      listings: 'https://$mirrorHost/daangn/',
+    ),
   };
+
+  /// [url] 이 어느 사이트의 이 플랫폼 몫인가. 어느 쪽도 아니면 null.
+  ///
+  /// 활성 사이트만이 아니라 **둘 다** 본다 — 모바일 레이아웃과 사진 첨부는 페이지
+  /// 주소만 보고 판단하므로, 미러로 돌리는 테스트에서도 같은 코드가 돈다.
+  PlatformSite? siteOf(Uri url) {
+    for (final site in PlatformSite.values) {
+      if (urlsOn(site).owns(url)) return site;
+    }
+    return null;
+  }
+
+  /// The listing form 한방 fills.
+  String get formUrl => urls.form;
 
   /// The page a signed-in agent lands on (직방 CEO 대시보드, 다방프로 대시보드,
   /// 당근부동산 중개소 홈). 로그인이 안 돼 있으면 **플랫폼이** 이 주소를 로그인 화면으로
   /// 되돌려 보낸다 — 그래서 0011 연동은 이 주소만 열면 된다.
-  String get dashboardUrl => switch (this) {
-    ListingPlatform.zigbang =>
-      'https://mirror-dimension-lab.pages.dev/zigbang/',
-    ListingPlatform.dabang => 'https://mirror-dimension-lab.pages.dev/dabang/',
-    ListingPlatform.daangn => 'https://mirror-dimension-lab.pages.dev/daangn/',
-  };
+  String get dashboardUrl => urls.dashboard;
 
-  /// The platform's own sign-in page, which 0011 shows as-is.
-  ///
-  /// The mirror captured 직방 and 다방 from the login screen forward and gates
-  /// everything behind it: asking for a form, a dashboard or an ad list
-  /// without a session answers `302` to 직방's `/zigbang/intro/` landing or
-  /// 다방's `/dabang/login/`. 당근's mirror has no gate, so its dashboard is
-  /// where its onboarding step both starts and ends.
-  String get loginUrl => switch (this) {
-    ListingPlatform.zigbang =>
-      'https://mirror-dimension-lab.pages.dev/zigbang/account/login/email/',
-    ListingPlatform.dabang =>
-      'https://mirror-dimension-lab.pages.dev/dabang/login/',
-    ListingPlatform.daangn => dashboardUrl,
-  };
+  /// The platform's own sign-in page.
+  String get loginUrl => urls.login;
 
   /// Where the agent's live listings are managed — 2022 등록된 광고 보기 and
   /// 3021 광고 종료 open this.
-  String get listingsUrl => switch (this) {
-    ListingPlatform.zigbang =>
-      'https://mirror-dimension-lab.pages.dev/zigbang/ads/oneroom/?status=open',
-    ListingPlatform.dabang =>
-      'https://mirror-dimension-lab.pages.dev/dabang/room/dabang-list/public/',
-    ListingPlatform.daangn => 'https://mirror-dimension-lab.pages.dev/daangn/',
-  };
+  String get listingsUrl => urls.listings;
 
   /// The platform's own final 등록 button. Adapters never press it; the agent
   /// does, and 한방 hears the press.
@@ -124,20 +257,8 @@ extension ListingPlatformConfig on ListingPlatform {
     ListingPlatform.daangn => false,
   };
 
-  /// 로그인 안 된 요청이 튕겨 가는 곳. 실물과 같은 자리다 — 직방은 랜딩(`/intro`)으로,
-  /// 다방은 로그인 화면으로 보낸다.
-  List<String> get signedOutPaths => switch (this) {
-    ListingPlatform.zigbang => const [
-      '/zigbang/intro',
-      '/zigbang/account/login',
-    ],
-    ListingPlatform.dabang => const ['/dabang/login'],
-    ListingPlatform.daangn => const [],
-  };
-
-  /// 지금 보고 있는 주소가 「로그인하라」는 화면인가.
-  bool isSignedOut(Uri url) =>
-      signedOutPaths.any((path) => url.path.startsWith(path));
+  /// 지금 보고 있는 주소가 「로그인하라」는 화면인가 (활성 사이트 기준).
+  bool isSignedOut(Uri url) => urls.isSignedOut(url);
 
   /// 세션 쿠키 이름 (실측). 다방 것은 HttpOnly 라 JS 에서는 보이지 않는다.
   String get sessionCookie => switch (this) {
@@ -152,12 +273,9 @@ extension ListingPlatformConfig on ListingPlatform {
     ListingPlatform.daangn => SessionCheck.none,
   };
 
-  /// 플랫폼에게 「로그인돼 있나」를 묻는 주소 (실물 경로 그대로). 답은 **코드가 아니라
-  /// 본문**으로 온다 — 로그인 전에도 200 이다(미러가 실물을 그대로 따른다).
-  String get sessionCheckPath => switch (this) {
-    ListingPlatform.dabang => '/dabang/api/v2/user/login/check',
-    _ => '',
-  };
+  /// 플랫폼에게 「로그인돼 있나」를 묻는 주소 (페이지와 같은 출처의 경로). 답은
+  /// **코드가 아니라 본문**으로 온다 — 로그인 전에도 200 이다.
+  String get sessionCheckPath => urls.sessionCheckPath;
 
   /// The mirror whose own upload handler takes the selected photos, if any.
   PhotoTarget? get photoTarget => switch (this) {
@@ -339,7 +457,7 @@ final List<FieldGroup> groups = [
       required: true,
       example: '서울특별시 강남구 테헤란로 123',
       unavailableReason:
-          '여기서 저장한 주소는 미러의 카카오 주소 검색 창에 검색어로 그대로 넘어갑니다. 좌표와 우편번호는 그 창에서 결과를 골라야 확정되므로, 전송 화면에서 한 번 눌러 주세요.',
+          '여기서 저장한 주소는 직방·다방의 카카오 주소 검색 창에 검색어로 그대로 넘어갑니다. 좌표와 우편번호는 그 창에서 결과를 골라야 확정되므로, 전송 화면에서 한 번 눌러 주세요.',
     ),
     MasterField(
       number: 3,
@@ -729,7 +847,7 @@ final List<FieldGroup> groups = [
       type: InputType.photoPicker,
       example: '0',
       unavailableReason:
-          '사진은 선택 사항입니다. 선택한 사진은 다방·당근 미러에 자동 첨부되며, 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다.',
+          '사진은 선택 사항입니다. 선택한 사진은 다방 등록 폼에 자동 첨부되며, 직방은 아직 사진 자동 첨부를 지원하지 않아 직접 올려야 합니다.',
     ),
     MasterField(
       number: 46,

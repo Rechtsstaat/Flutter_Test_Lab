@@ -53,8 +53,14 @@ void main() {
       expect(ListingPlatform.zigbang.label, '직방');
       expect(ListingPlatform.dabang.label, '다방');
       expect(ListingPlatform.daangn.label, '당근');
-      expect(ListingPlatform.zigbang.formUrl, contains('/zigbang/form/'));
-      expect(ListingPlatform.dabang.formUrl, contains('/dabang/form/room/'));
+      expect(
+        ListingPlatform.zigbang.formUrl,
+        'https://ceo.zigbang.com/ads/oneroom/ad-item/new',
+      );
+      expect(
+        ListingPlatform.dabang.formUrl,
+        'https://pro.dabangapp.com/form/room',
+      );
       expect(ListingPlatform.daangn.formUrl, contains('/daangn/form/article/'));
       // 당근은 자기 주소 검색을 쓰고, 사진은 다방·당근만 받는다.
       expect(ListingPlatform.daangn.usesKakaoPostcode, isFalse);

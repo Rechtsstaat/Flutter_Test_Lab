@@ -2,22 +2,14 @@ import 'dart:convert';
 
 import 'fields.dart';
 
-const _mirrorHost = 'mirror-dimension-lab.pages.dev';
-
-String _directoryOf(Uri uri) {
-  var path = uri.path;
-  if (path.endsWith('index.html')) {
-    path = path.substring(0, path.length - 'index.html'.length);
-  }
-  return path.endsWith('/') ? path : '$path/';
-}
-
-/// Builds the non-destructive mobile presentation installed over a mirror page.
+/// Builds the non-destructive mobile presentation installed over a platform
+/// page — the live 직방 CEO and 다방프로 pages, or their mirror.
 ///
 /// The real controls remain in the DOM so React handlers, validation, focus and
-/// trusted submit clicks continue to work. Only the known mirror host and only
-/// this platform's own corner of it are eligible; anything else deliberately
-/// receives no script.
+/// trusted submit clicks continue to work. Only this platform's own corner of a
+/// known site is eligible ([ListingPlatformConfig.siteOf]); anything else — the
+/// Kakao postcode frame, 직방's account.zigbang.com login, another platform —
+/// deliberately receives no script.
 ///
 /// The hard part is never the content but what wraps it. These are desktop
 /// pages, and a desktop page pins its width high up — 다방 carries
@@ -34,18 +26,15 @@ String _directoryOf(Uri uri) {
 /// own 로그인, its 대시보드, its 광고 목록 and the 매물 등록 form. The form
 /// alone also gets a surface, a submit bar and the section chips.
 String? mirrorMobileLayoutScript(ListingPlatform platform, Uri pageUrl) {
-  final formUrl = Uri.parse(platform.formUrl);
-  final root = '/${platform.name}/';
-  if (pageUrl.host != _mirrorHost ||
-      pageUrl.host != formUrl.host ||
-      !_directoryOf(pageUrl).startsWith(root)) {
-    return null;
-  }
+  final site = platform.siteOf(pageUrl);
+  if (site == null) return null;
+  final urls = platform.urlsOn(site);
+  final formUrl = Uri.parse(urls.form);
 
   final config = jsonEncode({
-    'host': formUrl.host,
-    'root': root,
-    'form': _directoryOf(formUrl),
+    'host': urls.host,
+    'root': urls.root,
+    'form': pageDirectory(formUrl),
     'profile': platform.name,
     'submitLabels': platform.submitLabels,
   });
