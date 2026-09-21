@@ -774,19 +774,32 @@ const _zigbangAdapterBody = r'''
    * 직방은 전화번호를 넣고 [확인] 을 누르지 않으면 「‘실매물 확인' 표시 노출을 위해서는,
    * 전화번호를 [확인]해 주셔야 합니다」로 등록을 막는다. [확인] 은 직방이 그 번호가
    * 집주인 번호로 쓸 수 있는지(중개사 번호·중복 여부)만 묻는 것이다 — 곧 **직방에
-   * 그 번호를 묻는 일**이라, 연습용 번호에는 누르지 않는다(아래). */
+   * 그 번호를 묻는 일**이다. 그래서 연습용 번호는 아예 넣지 않는다(아래). 넣고
+   * 누르지 않으면 등록이 막히고, 누르면 남의 번호를 계정의 이름으로 조회한다. */
   async function confirmLessor() {
     if (!filled(data.ownerPhone)) return;
     const phone = digits(data.ownerPhone);
-    if (!await fillIn('ownerPhone', 'verification.lessorPhone', phone, sameDigits)) return;
-    /* 연습용 번호([sampleOwnerPhone])에는 누르지 않는다 — 칸만 채우고 사람에게 넘긴다.
-     * 「자동 채우기」로 폼을 한 번 재 볼 때마다 남의 번호를 계정의 이름으로 조회하게
-     * 되기 때문이다. 화면에는 「확인할 항목」으로 남아, 실제 번호로 바꾸면 곧 보인다. */
+    /* 연습용 번호([sampleOwnerPhone])는 **칸에 넣지도 않는다.**
+     *
+     * [확인] 은 직방에 그 번호를 묻는 일이라 연습으로 누를 것이 못 된다. 그런데 번호만
+     * 넣고 누르지 않으면 **직방이 등록 자체를 막는다** — 제 검증기가 「'실매물 확인'
+     * 표시 노출을 위해서는, 전화번호를 [확인]해 주셔야 합니다」로 되돌려 보내고,
+     * 그러면 사람이 「매물 등록 완료」를 눌러도 아무 일도 일어나지 않는다
+     * (실물 번들 2026-09-22: `if (A && void 0 === i) return t(LESSOR_PHONE, …), !1`).
+     *
+     * 의뢰인 정보는 직방이 그 위에 「(선택사항)」이라 적어 둔 자리다. 비워 두면 등록은
+     * 그대로 되고, 사람이 실제 번호를 넣어 [확인]까지 누르면 그때 뱃지가 붙는다.
+     * **넣어 두고 안 누르는 것**만이 아무것도 못 하게 만든다. */
     if (phone === digits(samplePhone)) {
-      return mark('ownerPhone.confirm', false,
-        '자동 채우기의 연습용 번호(' + samplePhone + ')라 [확인] 을 누르지 않았습니다. ' +
-        '실제 의뢰인 번호로 바꾼 뒤 화면에서 [확인] 을 눌러 주세요.');
+      const box = byName('verification.lessorPhone');
+      if (box && digits(box.value)) setValue(box, '');
+      note('의뢰인 전화번호: 자동 채우기의 연습용 번호(' + samplePhone + ')라 넣지 않았습니다. ' +
+        '넣어 두고 [확인] 을 누르지 않으면 직방이 등록을 막고, 연습으로 [확인] 을 누르면 ' +
+        '그 번호가 계정의 이름으로 조회됩니다. 실제 의뢰인 번호를 넣고 [확인] 까지 ' +
+        '누르면 「실매물 확인」 뱃지가 붙습니다(선택).');
+      return;
     }
+    if (!await fillIn('ownerPhone', 'verification.lessorPhone', phone, sameDigits)) return;
     const field = byName('verification.lessorPhone');
     // 「의뢰인 정보」 묶음 전체를 본다 — 답(확인되었습니다 · 중복 사유)은 단추 옆이 아니라
     // 그 아래에 새로 그려진다.

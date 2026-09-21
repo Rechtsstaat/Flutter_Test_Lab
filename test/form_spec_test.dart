@@ -410,31 +410,35 @@ void main() {
     expect(script, isNot(contains('address:')));
   });
 
-  /* 직방의 전화번호 [확인] 은 칸을 보는 것이 아니라 **직방에 그 번호를 묻는** 일이다.
-   * 그래서 통합 폼의 「자동 채우기」가 넣어 두는 연습용 번호에는 누르지 않는다 — 폼을 한
-   * 번 재 볼 때마다 남의 번호가 계정의 이름으로 조회되기 때문이다. 칸은 채워 두고
-   * 「확인할 항목」으로 남겨, 실제 번호로 바꾸면 사람이 직접 누르게 한다. */
-  test('Zigbang adapter leaves [확인] unpressed for the auto-fill sample phone', () {
+  /* 직방의 전화번호 [확인] 은 칸을 보는 것이 아니라 **직방에 그 번호를 묻는** 일이라
+   * 연습으로 누를 것이 못 된다. 그렇다고 번호만 넣고 누르지 않으면 **등록 자체가
+   * 막힌다** — 직방의 검증기가 「'실매물 확인' 표시 노출을 위해서는, 전화번호를
+   * [확인]해 주셔야 합니다」로 되돌려 보내, 「매물 등록 완료」를 눌러도 아무 일이
+   * 없다(실물 번들 2026-09-22).
+   *
+   * 그래서 연습용 번호는 **칸에 넣지도 않는다.** 의뢰인 정보는 직방이 「(선택사항)」
+   * 이라 적어 둔 자리라 비워 두면 등록은 그대로 된다. */
+  test('Zigbang adapter keeps the auto-fill sample phone out of the form', () {
     final script = zigbangInjectionScript(
       jsonEncode({'ownerPhone': sampleOwnerPhone}),
     );
     // 연습용 번호는 통합 폼과 **한 곳**에서 온다 — 예시가 바뀌면 빗장도 같이 움직인다.
     expect(script, contains('const samplePhone = "$sampleOwnerPhone";'));
     expect(script, contains('if (phone === digits(samplePhone)) {'));
-    expect(script, contains('연습용 번호'));
-    expect(script, contains('실제 의뢰인 번호로 바꾼 뒤 화면에서 [확인] 을 눌러 주세요.'));
-    // 누르기 **전에** 와야 뜻이 있다.
+    // 넣지 않는다. 이미 들어 있으면 비운다 — 넣어 둔 채 안 누르는 것이 등록을 막는다.
+    expect(script, contains("const box = byName('verification.lessorPhone');"));
+    expect(script, contains('if (box && digits(box.value)) setValue(box, \'\');'));
+    // 빗장은 **채우기보다 먼저** 와야 한다.
     expect(
       script.indexOf('if (phone === digits(samplePhone)) {'),
-      lessThan(script.indexOf('\n    press(button);')),
+      lessThan(script.indexOf("fillIn('ownerPhone', 'verification.lessorPhone'")),
     );
-    // 그래도 칸은 채운다 — 사람이 그 자리에서 번호만 고쳐 넣게.
-    expect(
-      script.indexOf("fillIn('ownerPhone', 'verification.lessorPhone'"),
-      lessThan(script.indexOf('if (phone === digits(samplePhone)) {')),
-    );
-    // 실제 번호는 예전 그대로 눌린다 — 빗장은 이 한 번호에만 걸린다.
+    // 막는 것이 아니라 알리는 것이다 — 비워 두면 등록은 그대로 된다.
+    expect(script, contains('의뢰인 전화번호: 자동 채우기의 연습용 번호'));
+    expect(script, isNot(contains("miss('ownerPhone.confirm', '자동 채우기")));
+    // 실제 번호는 예전 그대로 채워지고 눌린다 — 빗장은 이 한 번호에만 걸린다.
     expect(script, contains("mark('ownerPhone.confirm', true)"));
+    expect(script, contains('press(button);'));
   });
 
   /* 통합 폼의 별표는 **실물 두 폼에서만** 온다. 로그인한 계정으로 직방 원룸 폼
