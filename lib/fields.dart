@@ -289,9 +289,9 @@ extension ListingPlatformConfig on ListingPlatform {
   /// **코드가 아니라 본문**으로 온다 — 로그인 전에도 200 이다.
   String get sessionCheckPath => urls.sessionCheckPath;
 
-  /// The mirror whose own upload handler takes the selected photos, if any.
+  /// The form whose own upload handler takes the selected photos, if any.
   PhotoTarget? get photoTarget => switch (this) {
-    ListingPlatform.zigbang => null,
+    ListingPlatform.zigbang => PhotoTarget.zigbang,
     ListingPlatform.dabang => PhotoTarget.dabang,
     ListingPlatform.daangn => PhotoTarget.daangn,
   };
@@ -305,6 +305,20 @@ extension ListingPlatformConfig on ListingPlatform {
     ListingPlatform.daangn => false,
   };
 }
+
+/// 통합 폼이 받는 사진 장수 — **사진을 받는 플랫폼들의 규칙을 모두 만족시키는 구간.**
+///
+/// 지금은 직방이 가장 깐깐하다: 「이미지 넣기」 창이 5장을 채우기 전에는 [확인] 을
+/// 열어 주지 않는다(2026-09-08 현장조사 §3-6). 한 곳이라도 못 받는 장수를 통합 폼이
+/// 받아 주면, 그 사진은 등록 흐름 한복판에서 조용히 떨어져 나간다.
+int get minListingPhotos => ListingPlatform.values
+    .map((platform) => platform.photoTarget?.minimum ?? 0)
+    .reduce((a, b) => a > b ? a : b);
+
+int get maxListingPhotos => ListingPlatform.values
+    .map((platform) => platform.photoTarget?.maximum ?? 0)
+    .where((limit) => limit > 0)
+    .reduce((a, b) => a < b ? a : b);
 
 enum InputType {
   text,
@@ -857,9 +871,11 @@ final List<FieldGroup> groups = [
       key: 'photoCount',
       label: '매물 사진 첨부',
       type: InputType.photoPicker,
+      required: true,
       example: '0',
       unavailableReason:
-          '사진은 선택 사항입니다. 선택한 사진은 다방 등록 폼에 자동 첨부되며, 직방은 아직 사진 자동 첨부를 지원하지 않아 직접 올려야 합니다.',
+          '사진은 5장 이상 20장 이하로 필수입니다 — 직방이 그렇게 요구합니다(첫 장이 대표 사진). '
+          '직방은 JPG·PNG 만, 장당 10MB까지 받습니다. 선택한 사진은 직방·다방 등록 폼에 자동으로 첨부됩니다.',
     ),
     MasterField(
       number: 46,

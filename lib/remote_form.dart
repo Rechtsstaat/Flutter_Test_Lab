@@ -15,9 +15,15 @@ import 'fields.dart';
 /// Answers `true` once the platform's listing form has rendered its own
 /// fields. The live forms draw themselves after the page load finishes (직방 is
 /// Next.js, 다방프로 a single-page app), so the adapter waits for this first.
-/// 어댑터가 제 차례를 마쳤다고 세우는 표식. 세 어댑터가 모두 시작할 때 내리고
-/// 끝날 때(오류로 빠져나온 길에서도) 세운다.
+/// 어댑터가 **이제 사진을 붙여도 된다**고 세우는 표식. 세 어댑터가 모두 시작할 때
+/// 내리고 끝날 때(오류로 빠져나온 길에서도) 세운다.
+///
+/// 다방·당근은 제 차례를 다 마친 뒤에 세운다. 직방은 주소 검색 **직전에** 세우고
+/// [photosDoneFlag] 를 기다린다 — 사진 창이 떠 있는 동안은 주소를 고를 수 없어서다.
 const formDoneFlag = 'window.__flrFormDone';
+
+/// 사진 첨부가 끝났다고 네이티브가 세워 주는 표식. 직방 어댑터만 이것을 기다린다.
+const photosDoneFlag = 'window.__flrPhotosDone';
 
 /// 표식이 설 때까지 기다린다. 섰으면 `true`, 시간이 다했거나 [isCancelled] 가
 /// 끊었으면 `false`.
@@ -197,6 +203,7 @@ String zigbangInjectionScript(String payload) =>
 (async () => {
   const data = $payload;
   window.__flrFormDone = false;
+  window.__flrPhotosDone = false;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const output = {applied: 0, missing: [], unsupported: [], verified: 0, violations: []};
   // These names were read from the published mirror form. Never rely on its
@@ -224,8 +231,7 @@ String zigbangInjectionScript(String payload) =>
     heating: '난방 방식: 직방 원룸 폼에 입력란이 없습니다.',
     lh: 'LH 전세임대 여부: 직방 원룸 폼에 입력란이 없습니다.',
     rooms: '방 개수: 직방 원룸 폼은 방 구조로 방 수를 정하며 별도 방 개수 입력란이 없습니다.',
-    unknownFeeReason: '확인 불가 법정 사유: 직방 원룸 폼의 관리비 방식에는 확인 불가 분기가 없습니다.',
-    photoCount: '사진: 직방은 아직 사진 자동 첨부를 지원하지 않아 직접 올려야 합니다. 통합 폼에서 선택한 사진은 다방에 자동 첨부됩니다.'
+    unknownFeeReason: '확인 불가 법정 사유: 직방 원룸 폼의 관리비 방식에는 확인 불가 분기가 없습니다.'
   };
   const esc = s => (window.CSS && CSS.escape) ? CSS.escape(String(s)) : String(s).replace(/[^a-zA-Z0-9_-]/g, '\\\\\$&');
   const find = name => document.querySelector('[name="' + esc(name) + '"], #' + esc(name) + ', [data-flr-key="' + esc(name) + '"]');
@@ -450,6 +456,21 @@ String zigbangInjectionScript(String payload) =>
     input('title', data.title); input('description', data.description); input('privateMemo', data.privateMemo); input('ownerPhone', data.ownerPhone);
     for (const message of (window.__flrPostcode ? window.__flrPostcode.notes : [])) note(message);
 
+    /* 사진이 먼저다.
+     *
+     * 직방은 사진을 「이미지 넣기」 창 안에서 받는데, Radix 창이 열려 있는 동안은
+     * <body> 의 포인터가 막힌다 — 그 위에 주소 검색 겹을 띄워 두면 사람이 주소를
+     * 고를 수 없다. 그래서 여기서 표식을 세워 사진을 부르고, 사진이 끝났다는 말을
+     * 들은 뒤에 주소 검색을 띄운다([MirrorSession._transferPhotos] 가 알려 준다).
+     *
+     * 사진이 없으면 기다리지 않는다. 끝내 말이 없어도 5분이면 주소로 넘어간다 —
+     * 주소를 영영 못 고르는 것보다 낫다. */
+    if (Number(data.photoCount) > 0) {
+      window.__flrFormDone = true;
+      const until = Date.now() + 300000;
+      while (window.__flrPhotosDone !== true && Date.now() < until) await sleep(250);
+    }
+
     // 주소 — 직방 미러는 주소 칸을 누르면 카카오 우편번호 창을 띄운다. 브리지가 그 창을
     // 웹뷰 안 전체 화면 겹으로 바꿔 놓았으므로, 여기서 눌러 주면 사용자가 결과만 고르면 된다.
     // 고르고 나면 미러가 「소재지 공개 확인」 창을 띄운다 — 매물 대분류로 답이 정해진다.
@@ -485,8 +506,8 @@ String zigbangInjectionScript(String payload) =>
       output.violations.push('깐깐이 위반: ' + detail);
     }
   } catch (error) { output.violations.push('자동 입력 오류: ' + String(error)); }
-  // 폼은 여기서 조용해진다. 직방은 사진을 자동으로 붙이지 않지만, 표식은 어댑터 셋이
-  // 같은 약속을 지킨다 ([MirrorSession._adapterDone]).
+  // 표식은 어댑터 셋이 같은 약속을 지킨다 ([MirrorSession._adapterDone]). 직방은 위에서
+  // 이미 세웠을 수 있으나, 오류로 빠져나온 길에서도 사진은 붙는 편이 낫다.
   window.__flrFormDone = true;
   window.ListingResult.postMessage(JSON.stringify(output));
 })();

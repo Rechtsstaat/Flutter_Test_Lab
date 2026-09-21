@@ -11,6 +11,8 @@ import 'package:jibang_listing_test/photo_transfer.dart';
 void main() {
   late Directory temporary;
   late XFile photo;
+  // 직방은 JPG·PNG 만 받는다. 형식별로 갈리는 자리를 재려면 두 가지가 다 있어야 한다.
+  late XFile jpeg;
   setUp(() async {
     temporary = await Directory.systemTemp.createTemp('listing_photos_');
     final file = File('${temporary.path}/room.png');
@@ -20,6 +22,9 @@ void main() {
       ),
     );
     photo = XFile(file.path);
+    final shot = File('${temporary.path}/room.jpg');
+    await shot.writeAsBytes([0xff, 0xd8, 0xff, 0xe0, 7, 7, 7, 7]);
+    jpeg = XFile(shot.path);
   });
   tearDown(() async => temporary.delete(recursive: true));
 
@@ -341,6 +346,31 @@ void main() {
     }
   });
 
+  /* 직방 쪽 판단도 **돌려 봐야** 안다.
+   *
+   * 직방은 사진을 창 안에서 받는다. 「창이 열렸는가 / 다 모였는가 / 확인이 풀렸는가 /
+   * 카드가 그만큼 앉았는가」는 전부 JavaScript 문자열 안에 있어 글자만으로는 보이지
+   * 않는다. 실물을 흉내 낸 가짜 창 위에서 다리를 그대로 돌린다. */
+  test('직방 사진 다리를 가짜 창 위에서 실제로 돌려 본다', () {
+    final script = File(
+      '${Directory.systemTemp.path}/zigbang_photo_bridge_${DateTime.now().microsecondsSinceEpoch}.js',
+    );
+    try {
+      script.writeAsStringSync(listingPhotoBridgeScript(PhotoTarget.zigbang));
+      final result = Process.runSync('node', [
+        'test/tools/photo_bridge_probe.mjs',
+        '--script=${script.path}',
+        '--target=zigbang',
+      ]);
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      final report = jsonDecode(result.stdout as String) as Map<String, dynamic>;
+      expect(report['pass'], isTrue, reason: result.stdout as String);
+      expect((report['cases'] as List), hasLength(4));
+    } finally {
+      if (script.existsSync()) script.deleteSync();
+    }
+  });
+
   // image_picker 의 60자짜리 임시 이름을 그대로 올리지 않는다. 남의 광고에 붙을 이름으로
   // 마땅치 않고, 실기기에서만 조용히 실패하는 동안 한 번도 확인해 보지 않은 변수였다.
   test('플랫폼에는 짧고 단순한 파일 이름으로 보낸다', () async {
@@ -488,9 +518,11 @@ void main() {
     expect(skipped, hasLength(1));
   });
 
-  test('each photo bridge looks only at its own mirror form', () {
+  test('each photo bridge looks only at its own form', () {
+    final zigbang = listingPhotoBridgeScript(PhotoTarget.zigbang);
     final dabang = listingPhotoBridgeScript(PhotoTarget.dabang);
     final daangn = listingPhotoBridgeScript(PhotoTarget.daangn);
+    expect(zigbang, contains('"/ads/oneroom/ad-item/new/"'));
     expect(dabang, contains('"/dabang/form/room/"'));
     expect(dabang, contains("section#visual_info"));
     expect(daangn, contains('"/daangn/form/article/"'));
@@ -498,11 +530,43 @@ void main() {
     // 당근 칸은 올라가는 동안 잠기고, 다 올라가면 sortable 과 data-mirror-key 를 받는다.
     expect(daangn, contains("classList.contains('cursor-not-allowed')"));
     expect(daangn, contains("getAttribute('data-mirror-key')"));
-    for (final script in [dabang, daangn]) {
+    for (final script in [zigbang, dabang, daangn]) {
       // 완료를 만들어 내지 않는다 — 플랫폼이 제 카드를 처리 완료로 표시해야 한다.
-      expect(script, contains('const strict = grown && settled(fresh[0])'));
+      expect(script, contains('const strict = grown && fresh.every(settled)'));
       expect(script, contains("el.dispatchEvent(new Event('change'"));
     }
+  });
+
+  /* 직방의 파일 입력은 **창을 열기 전에는 문서에 없다** (2026-09-08 현장조사 §3-6).
+   *
+   * 폼의 `input[name=images]` 는 readonly 라 값을 받아 적기만 하고, 진짜 입력은
+   * 「이미지 넣기」 창 안 Dropzone 에 숨어 있다. 그래서 다리는 창을 열고(open),
+   * 고른 것을 한 번에 건네고, 확인 버튼으로 폼에 들여보낸다(seal). */
+  test('직방 다리는 창을 열고 한 번에 건넨 뒤 확인으로 들여보낸다', () {
+    final zigbang = listingPhotoBridgeScript(PhotoTarget.zigbang);
+    expect(zigbang, contains('const MODAL = true;'));
+    expect(zigbang, contains(r"/이미지 넣기/.test(box.textContent || '')"));
+    expect(zigbang, contains(r'''document.querySelector('input[name="images"]')'''));
+    // 확인 버튼은 직방이 사진을 다 받고 나서야 풀린다.
+    expect(zigbang, contains(r"(b.textContent || '').trim() === '확인'"));
+    expect(zigbang, contains('if (!button || button.disabled) return false;'));
+    // 다 모이기 전에는 쥐고만 있는다 — 직방은 5장 미만을 받지 않는다.
+    expect(zigbang, contains('if (this.queue.length < this.expected) return'));
+    // 다방은 예전 그대로 한 장씩 건넨다.
+    expect(
+      listingPhotoBridgeScript(PhotoTarget.dabang),
+      contains('const MODAL = false;'),
+    );
+  });
+
+  // 직방이 창에 적어 둔 규칙 그대로다: JPG·PNG 만, 장당 10MB, 최소 5장 최대 20장.
+  test('직방의 사진 규칙은 그 창이 적어 둔 것을 그대로 따른다', () {
+    expect(PhotoTarget.zigbang.acceptedTypes, {'image/jpeg', 'image/png'});
+    expect(PhotoTarget.zigbang.minimum, 5);
+    expect(PhotoTarget.zigbang.maximum, 20);
+    expect(PhotoTarget.zigbang.maxBytes, 10 * 1024 * 1024);
+    expect(PhotoTarget.dabang.minimum, 1);
+    expect(PhotoTarget.dabang.modal, isFalse);
   });
 
   // 실기기의 다방은 **서버 id 까지 받은 카드를** aria-disabled=true 로 둔 채 두기도
@@ -512,7 +576,7 @@ void main() {
     expect(dabang, contains('const PATIENCE = 4000;'));
     expect(dabang, contains('const patient = !strict && grown && stableFor >= PATIENCE;'));
     // 인정한 카드는 다음 사진을 막지 않는다.
-    expect(dabang, contains('this.okIds.push(id)'));
+    expect(dabang, contains('this.okIds.push(mark)'));
     expect(dabang, contains('!this.okIds.includes(cardId(c))'));
   });
 
@@ -527,52 +591,194 @@ void main() {
     expect(dabang, contains('touch() { this.until = Date.now() + 60000; }'));
   });
 
-  testWidgets(
-    'photos are optional and one selected photo can be sent or deleted',
-    (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(home: ListingFormPage(pickImages: () async => [photo])),
-      );
-
-      BrandButton cta() => tester.widget<BrandButton>(
-        find.byWidgetPredicate(
-          (widget) => widget is BrandButton && widget.label == '광고 등록',
+  /* 사진은 **필수 5~20장**이다 — 직방의 「이미지 넣기」 창이 정한 규칙이다.
+   *
+   * 한 장이라도 모자라면 직방에서는 확인 버튼이 잠긴 채라 사진 없이 끝난다. 그래서
+   * 통합 폼이 먼저 막는다: 5장을 채우기 전에는 등록 CTA 가 열리지 않는다. */
+  testWidgets('사진 5장을 채워야 등록 CTA 가 열리고, 한 장을 빼면 다시 잠긴다', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ListingFormPage(
+          pickImages: () async => List.filled(minListingPhotos, photo),
         ),
-      );
+      ),
+    );
 
-      await tester.tap(find.text('자동 채우기'));
-      await tester.pump();
-      expect(
-        cta().onPressed,
-        isNotNull,
-        reason: '사진이 없어도 등록 CTA 가 활성화되어야 합니다.',
-      );
+    BrandButton cta() => tester.widget<BrandButton>(
+      find.byWidgetPredicate(
+        (widget) => widget is BrandButton && widget.label == '광고 등록',
+      ),
+    );
 
-      // The photo strip opens 사진 및 광고 채널, further down the long form.
-      await tester.scrollUntilVisible(
-        find.byTooltip('사진 추가'),
-        400,
-        scrollable: find.byType(Scrollable).first,
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('0/20'), findsOneWidget);
-      await tester.runAsync(() async {
-        await tester.tap(find.byTooltip('사진 추가'));
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-      });
-      await tester.pumpAndSettle();
-      expect(find.text('1/20'), findsOneWidget);
-      expect(cta().onPressed, isNotNull);
+    await tester.tap(find.text('자동 채우기'));
+    await tester.pump();
+    expect(
+      cta().onPressed,
+      isNull,
+      reason: '사진이 없으면 등록 CTA 가 잠겨 있어야 합니다.',
+    );
 
-      await tester.tap(find.byTooltip('1번 사진 삭제'));
-      await tester.pump();
-      expect(find.text('0/20'), findsOneWidget);
+    // The photo strip opens 사진 및 광고 채널, further down the long form.
+    await tester.scrollUntilVisible(
+      find.byTooltip('사진 추가'),
+      400,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('0/$maxListingPhotos'), findsOneWidget);
+    await tester.runAsync(() async {
+      await tester.tap(find.byTooltip('사진 추가'));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('$minListingPhotos/$maxListingPhotos'), findsOneWidget);
+    expect(cta().onPressed, isNotNull);
 
-      await tester.tap(find.text('자동 채우기'));
-      await tester.pump();
-      expect(cta().onPressed, isNotNull);
-    },
-  );
+    // 한 장이 빠지면 직방이 받아 주지 않는다. 보내기 전에 여기서 잠긴다.
+    await tester.tap(find.byTooltip('$minListingPhotos번 사진 삭제'));
+    await tester.pump();
+    expect(find.text('${minListingPhotos - 1}/$maxListingPhotos'), findsOneWidget);
+    expect(cta().onPressed, isNull);
+    expect(find.textContaining('매물 사진'), findsWidgets);
+  });
+
+  /* 직방으로 보내는 길 전체.
+   *
+   * 창을 열고([open]) → 고른 것을 한 장씩 흘려보내고 → 마지막 장에서 한 번에 건네고
+   * → 확인을 눌러([seal]) 폼에 들여보내고 → 카드가 그만큼 앉았는지 본다. 순서가
+   * 어긋나면 사진은 조용히 사라진다 — 그래서 순서 자체를 잰다. */
+  test('직방에는 창을 열고 다섯 장을 한 번에 건넨 뒤 확인으로 들여보낸다', () async {
+    final bridge = _ZigbangBridge();
+    final progress = <int>[];
+
+    final skipped = await transferListingPhotos(
+      target: PhotoTarget.zigbang,
+      photos: List.filled(5, jpeg),
+      evaluate: bridge.evaluate,
+      onProgress: (done, total) {
+        expect(total, 5);
+        progress.add(done);
+      },
+    );
+
+    expect(skipped, isEmpty);
+    expect(progress, [0, 1, 2, 3, 4, 5]);
+    expect(bridge.opened, greaterThan(0), reason: '창을 먼저 열어야 합니다.');
+    expect(bridge.received, hasLength(5));
+    // 건넨 것은 고른 그 사진이어야 한다.
+    final original = await jpeg.readAsBytes();
+    for (final received in bridge.received) {
+      expect(received, orderedEquals(original));
+    }
+    // 창을 열고 → 다 건네고 → 확인 → 카드 확인. 이 차례다.
+    expect(
+      bridge.order.where((step) => step != 'append').toList(),
+      containsAllInOrder([
+        'open',
+        'begin',
+        'commit',
+        'begin',
+        'commit',
+        'seal',
+        'status',
+        'clear',
+      ]),
+    );
+    expect(
+      bridge.order.indexOf('seal'),
+      greaterThan(bridge.order.lastIndexOf('commit')),
+      reason: '확인은 마지막 사진을 건넨 뒤에 눌러야 합니다.',
+    );
+    expect(
+      bridge.order.indexOf('status'),
+      greaterThan(bridge.order.lastIndexOf('seal')),
+      reason: '카드는 확인을 누른 뒤에 생깁니다.',
+    );
+  });
+
+  /* 직방은 5장 미만을 받지 않는다 — 창의 [확인] 이 잠긴 채다.
+   *
+   * 그러면 **손대지 않는다.** 절반만 올려 두고 실패했다고 말하는 것보다, 왜 못 했는지
+   * 말하고 사람이 화면에서 이어서 올리게 하는 편이 낫다. */
+  test('직방이 받을 수 있는 사진이 다섯 장을 못 채우면 폼을 건드리지 않는다', () async {
+    final heic = File('${temporary.path}/room.heic');
+    await heic.writeAsBytes([
+      ...List.filled(4, 0),
+      ...'ftypheic'.codeUnits,
+      ...List.filled(24, 0),
+    ]);
+    var called = false;
+    final skipped = await transferListingPhotos(
+      target: PhotoTarget.zigbang,
+      // 다섯 장이지만 한 장은 직방이 받지 않는 형식이다 → 넷뿐이다.
+      photos: [jpeg, jpeg, jpeg, jpeg, XFile(heic.path)],
+      evaluate: (_) async {
+        called = true;
+        return '{}';
+      },
+      onProgress: (_, _) => fail('한 장도 보내지 않아야 합니다.'),
+    );
+    expect(called, isFalse);
+    expect(skipped, hasLength(2));
+    expect(skipped.first, allOf(contains('5번 사진'), contains('JPEG·PNG')));
+    expect(skipped.last, allOf(contains('5장 이상'), contains('4장뿐')));
+  });
+
+  // 장당 10MB — 직방이 창에 적어 둔 한계다. 그냥 건네면 그쪽 업로더가 조용히 떨어뜨린다.
+  test('직방이 정한 장당 크기를 넘는 사진은 건너뛰고 그 이유를 돌려준다', () async {
+    final big = File('${temporary.path}/big.jpg');
+    final handle = await big.open(mode: FileMode.write);
+    await handle.writeFrom([0xff, 0xd8, 0xff, 0xe0]);
+    await handle.truncate(PhotoTarget.zigbang.maxBytes + 1);
+    await handle.close();
+
+    final bridge = _ZigbangBridge();
+    final skipped = await transferListingPhotos(
+      target: PhotoTarget.zigbang,
+      photos: [jpeg, jpeg, jpeg, jpeg, jpeg, XFile(big.path)],
+      evaluate: bridge.evaluate,
+      onProgress: (_, _) {},
+    );
+    expect(bridge.received, hasLength(5), reason: '나머지 다섯 장은 그대로 갑니다.');
+    expect(skipped, hasLength(1));
+    expect(skipped.single, allOf(contains('6번 사진'), contains('10MB')));
+  });
+
+  // 확인 버튼이 끝내 풀리지 않으면 본 것을 그대로 적고 멈춘다 — 직방이 사진을 받지
+  // 못했다는 뜻이고, 그 이유는 대개 창 안에 적혀 있다.
+  test('직방이 확인 버튼을 열어 주지 않으면 창이 한 말을 그대로 옮긴다', () async {
+    await expectLater(
+      transferListingPhotos(
+        target: PhotoTarget.zigbang,
+        photos: List.filled(5, jpeg),
+        timeout: Duration.zero,
+        evaluate: (script) async {
+          if (script.contains('__flrPhotos.open(')) {
+            return jsonEncode({'ready': true});
+          }
+          if (script.contains('__flrPhotos.seal(')) {
+            return jsonEncode({
+              'sealed': false,
+              'count': 0,
+              'spoken': '파일 용량이 초과되었습니다',
+            });
+          }
+          return '{}';
+        },
+        onProgress: (_, _) {},
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'error',
+          allOf(
+            contains('확인 버튼을 열어 주지 않았습니다'),
+            contains('플랫폼 화면: 「파일 용량이 초과되었습니다」'),
+          ),
+        ),
+      ),
+    );
+  });
 }
 
 /// Records the native transport contract. DOM/card behavior is exercised by
@@ -663,5 +869,67 @@ class _RecordingPhotoBridge {
   String _encode(Map<String, dynamic> value) {
     final encoded = jsonEncode(value);
     return doubleEncoded ? jsonEncode(encoded) : encoded;
+  }
+}
+
+/// 직방 쪽 전송 차례를 받아 적는다. 창을 열고, 다섯 장을 모아 한 번에 받고, 확인을
+/// 누른 뒤에야 카드가 앉는 — 실물이 하는 차례를 그대로 흉내 낸다.
+class _ZigbangBridge {
+  final order = <String>[];
+  final received = <List<int>>[];
+  List<int>? staging;
+  int opened = 0;
+  int staged = 0;
+  int seals = 0;
+  int statusCalls = 0;
+
+  Future<Object> evaluate(String script) async {
+    if (script == listingPhotoBridgeScript(PhotoTarget.zigbang)) {
+      return jsonEncode({'ready': true, 'count': 0});
+    }
+    final command = RegExp(r'window\.__flrPhotos\.(\w+)\(\.\.\.(\[.*\])\)')
+        .firstMatch(script);
+    expect(command, isNotNull);
+    final args = jsonDecode(command!.group(2)!) as List;
+    final method = command.group(1)!;
+    order.add(method);
+    switch (method) {
+      case 'open':
+        // 창은 곧바로 뜨지 않는다. 한 번 되물어야 열린다.
+        opened++;
+        return jsonEncode({'ready': opened > 1});
+      case 'begin':
+        expect(staging, isNull, reason: '앞 장을 마친 뒤에 다음 장을 시작합니다.');
+        expect(
+          PhotoTarget.zigbang.acceptedTypes,
+          contains((args[0] as Map)['type']),
+        );
+        staging = [];
+        return jsonEncode({'count': 0});
+      case 'append':
+        staging!.addAll(base64Decode(args.single as String));
+        return jsonEncode({'bytes': staging!.length});
+      case 'commit':
+        received.add(staging!);
+        staging = null;
+        staged++;
+        // 마지막 장에서만 실제로 건네진다.
+        return jsonEncode(
+          staged < received.length + 0 && staged < 5
+              ? {'staged': staged}
+              : {'dispatched': true, 'files': staged},
+        );
+      case 'seal':
+        // 직방이 사진을 다 받아야 확인이 풀린다 — 한 번은 잠겨 있다.
+        seals++;
+        return jsonEncode({'sealed': seals > 1, 'count': 0});
+      case 'status':
+        statusCalls++;
+        return jsonEncode({'ready': true, 'count': staged, 'id': 'zb-last'});
+      case 'clear':
+        return jsonEncode({'cleared': true});
+      default:
+        fail('Unexpected photo bridge command: $method');
+    }
   }
 }

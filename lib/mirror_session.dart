@@ -427,9 +427,25 @@ class MirrorSession extends MirrorPage {
     );
   }
 
+  /// 사진이 끝났다고 어댑터에게 알린다.
+  ///
+  /// 직방 어댑터는 이 말을 듣고서야 카카오 주소 검색을 띄운다 — 사진 창이 떠 있는
+  /// 동안은 `body` 의 포인터가 막혀 사람이 주소를 고를 수 없기 때문이다. 붙이지
+  /// 못했더라도 알린다: 주소는 고를 수 있어야 한다.
+  Future<void> _releaseAdapter() async {
+    try {
+      await controller.runJavaScript('$photosDoneFlag = true;');
+    } catch (_) {
+      // 페이지가 넘어가는 중이면 답이 없다. 어댑터도 5분이면 스스로 넘어간다.
+    }
+  }
+
   Future<void> _transferPhotos() async {
     final target = platform.photoTarget;
-    if (target == null || photos.isEmpty) return;
+    if (target == null || photos.isEmpty) {
+      await _releaseAdapter();
+      return;
+    }
     _photosDone = false;
     try {
       final skipped = await transferListingPhotos(
@@ -453,6 +469,7 @@ class MirrorSession extends MirrorPage {
       photoFailure = '사진 첨부: $error';
     }
     _photosDone = true;
+    await _releaseAdapter();
     if (filled) filling = false;
     notifyListeners();
     onPhotoTransferComplete?.call(controller, photoFailure);
