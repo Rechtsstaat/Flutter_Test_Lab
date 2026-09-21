@@ -147,10 +147,43 @@ bool fieldVisible(Map<String, dynamic> values, String key) {
 }
 
 /// 칸 옆에 빨간 별을 붙일 것인가 — 지금 보이는 칸 가운데 채워야 하는 것.
+///
+/// **별의 근거는 실물 두 폼뿐이다.** 직방·다방 중 **한 곳이라도** 그 칸에 별을
+/// 달면 필수, 두 곳 다 달지 않으면 선택이다. 한 곳에만 있는 칸이라도 통합 폼은
+/// 받아 둔다 — 받아 두되 억지로 막지는 않는다.
+///
+/// 실물 확인 2026-09-22(로그인한 계정으로 두 폼을 열어 별표를 세어 봄):
+///
+///  · 직방 원룸 폼(`span.text-red-500` 이 붙은 25줄) — 주소·동·호·건물 종류·
+///    거래 유형·전용면적·사용승인일·입주 가능일·전체 층·해당 층·구조·주실 방향·
+///    화장실 수·총 주차대수·위반건축물·엘리베이터·관리비 부과 방식(+기준·월 평균·
+///    포함 항목·실비 세부 내역)·매물 사진·한줄 요약·상세 설명·중개 의뢰를 받은 방법.
+///  · 다방 주택/빌라 폼(`th` 의 `*`) — 매물유형·매물 주소·매물 크기·방 정보·
+///    건축물용도·건축물승인·거래 종류·가격 정보·관리비·입주 가능 일자·층 수·
+///    방향 기준/방향·욕실 수·엘리베이터·주차 가능 여부·복층 여부·일반 사진·제목·
+///    상세설명. 매매·전세·월세 셋을 다 눌러 보았고 별이 붙는 줄은 같다 — **LH
+///    전세임대 여부\***만 전세·월세에서 나타나고 매매에서는 줄 자체가 없다
+///    ([fieldVisible] 의 `'lh' => rent` 와 같다).
+///
+/// **보지 못한 폼이 있다.** 직방 빌라(「빌라 매물의 광고수량을 모두 이용중입니다」로
+/// 폼이 열리지 않는다 — 남의 운영 중인 광고를 종료해야 열린다)와 직방 오피스텔
+/// (상품이 없어 원룸 폼으로 되돌려진다), 다방 오피스텔·아파트(대분류가 바뀌지
+/// 않는다). 그 폼들의 별표는 **확인한 적이 없다** — 여기 적힌 것은 직방 원룸과
+/// 다방 주택/빌라 둘뿐이다.
+///
+/// 그래서 **선택**으로 내려온 것들(전에는 통합 폼이 막고 있었다): 공급면적(다방
+/// 「공급면적(선택)」·직방엔 칸이 없다), 융자금(두 곳 다 별이 없다), 대출 가능
+/// 여부·전자계약(직방 「매물 조건」 체크, 별 없음), 반려동물(직방 체크 · 다방
+/// 「방 특징(선택)」), 난방 방식·에어컨 종류(다방 「난방/냉방 시설」, 별 없음),
+/// 총 세대수(직방 「총 세대 수」 · 다방 「세대(가구수)」, 둘 다 별 없음), 현관 구조
+/// (다방 「현관 유형」, 별 없음), 월 주차비(두 폼 어디에도 칸이 없다), 그리고
+/// 의뢰인 성함·연락처
+/// (직방이 「(선택사항)」이라고 적어 두었고 다방에는 칸이 없다).
 bool fieldRequired(Map<String, dynamic> values, String key) {
   if (!fieldVisible(values, key)) return false;
   return switch (key) {
     'building' => values['singleBuilding'] != true,
+    // 두 폼이 별을 단 줄, 그리고 그 줄이 갈라 놓은 조건부 칸.
     'complexName' ||
     'deposit' ||
     'lh' ||
@@ -169,20 +202,28 @@ bool fieldRequired(Map<String, dynamic> values, String key) {
     'otherFeeNote' ||
     'unknownFeeReason' ||
     'parkingCount' ||
-    HifiField.monthlyParkingFee ||
-    HifiField.floorBand ||
     HifiField.structure ||
-    'airconType' ||
     'moveInDate' ||
     'ownerPhoneDuplicateNote' ||
     'mediationNote' => true,
     'parkingPerHousehold' => isComplexProperty(values),
+    // 다방 「복층 여부*」. 직방은 구조의 한 갈래(복층형 원룸)로 받는다.
+    HifiField.duplex => true,
+    /* 저/중/고만은 두 폼의 별표를 따르지 않는다. 다방은 「표기를 원할 경우 선택」이라
+     * 적어 두었지만, 이 칸은 **「층수 비공개」를 켠 사람에게만** 보인다. 켜 놓고 비우면
+     * 다방에 넣을 표기가 없어 실제 층이 그대로 나간다 — 숨기려고 켠 사람에게는 그것이
+     * 틀린 광고다. 켜지 않은 사람은 이 칸을 보지도 않으므로 막는 것도 아니다. */
+    HifiField.floorBand => true,
+    // 한 곳에만 있고, 그 한 곳도 별을 달지 않은 칸 — 받아 두되 막지 않는다.
     HifiField.householdCount ||
-    HifiField.duplex ||
     HifiField.entranceType ||
     HifiField.eContract ||
+    HifiField.monthlyParkingFee ||
     HifiField.ownerName ||
-    'ownerPhone' => true,
+    'airconType' ||
+    'ownerPhone' => false,
+    // 입주 방식은 [moveInDate] 로 받고, 방 구조는 구조·복층에서 세워진다
+    // ([roomLayoutFrom]) — 사람이 직접 채우는 칸이 아니다.
     'moveInType' || 'roomLayout' => false,
     _ => _requiredByField[key] ?? false,
   };
@@ -450,7 +491,9 @@ List<String> listingViolations(
       problems.add('사용승인일은 오늘 이후일 수 없어요');
     }
   }
-  if (fieldRequired(values, HifiField.householdCount) &&
+  // 총 세대수는 이제 선택이다(두 폼 다 별이 없다). 그래도 **적었다면** 숫자여야 한다 —
+  // 필수 여부가 아니라 칸이 보이는지로 묻는다.
+  if (fieldVisible(values, HifiField.householdCount) &&
       !_blank(values, HifiField.householdCount) &&
       !_positiveInt(values, HifiField.householdCount)) {
     problems.add('총 세대수는 1 이상의 정수로 적어 주세요');

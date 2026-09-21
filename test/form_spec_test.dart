@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:jibang_listing_test/main.dart';
+import 'package:jibang_listing_test/listing_rules.dart';
 import 'package:jibang_listing_test/photo_transfer.dart';
 
 void main() {
@@ -22,7 +23,18 @@ void main() {
     expect(fields.where((field) => field.number <= 50), hasLength(50));
     expect(fields, hasLength(62));
     expect(fields.map((field) => field.number).toSet(), hasLength(fields.length));
-    expect(fields.where((field) => field.required), hasLength(29));
+    // 별표는 세는 것이 아니라 **어느 줄인가**가 뜻이다 — 실물 두 폼이 별을 단 줄만
+    // 남는다(2026-09-22 확인, [fieldRequired] 주석에 근거를 적었다).
+    expect(
+      fields.where((field) => field.required).map((field) => field.key).toSet(),
+      {
+        'propertyType', 'address', 'unit', 'exclusiveArea', 'floorAll', 'floor',
+        'buildingUse', 'approvalDate', 'trade', 'deposit', 'monthlyRent',
+        'manageMethod', 'rooms', 'bathrooms', 'directionBase', 'direction',
+        'parking', 'elevator', 'violation', 'moveInType', 'photoCount',
+        'title', 'description', 'mediationMethod',
+      },
+    );
     expect(
       fields.singleWhere((field) => field.key == 'photoCount').required,
       isTrue,
@@ -423,6 +435,73 @@ void main() {
     );
     // 실제 번호는 예전 그대로 눌린다 — 빗장은 이 한 번호에만 걸린다.
     expect(script, contains("mark('ownerPhone.confirm', true)"));
+  });
+
+  /* 통합 폼의 별표는 **실물 두 폼에서만** 온다. 로그인한 계정으로 직방 원룸 폼
+   * (`span.text-red-500` 25줄)과 다방 월세 폼(`th` 의 `*` 20줄)을 열어 별을 세었다
+   * (2026-09-22). 한 곳이라도 별을 달면 필수, 두 곳 다 달지 않으면 선택이다.
+   *
+   * 칸을 없애지는 않는다 — 한 곳에만 있는 줄도 통합 폼은 받아 둔다. 받아 두되
+   * 막지 않는 것과, 아예 묻지 않는 것은 다르다. */
+  test('별표는 직방·다방 중 한 곳이라도 필수인 줄에만 붙는다', () {
+    final values = <String, dynamic>{
+      'trade': '월세',
+      'rooms': '1',
+      'parking': '주차 가능',
+      'appliances': ['에어컨'],
+      'floorPrivate': true,
+      'manageMethod': '정액 관리비',
+    };
+
+    // 두 폼 다 별이 없다 — 그래도 칸은 남아 있어야 한다.
+    for (final (key, why) in [
+      ('supplyArea', '다방 「공급면적(선택)」 · 직방엔 칸이 없다'),
+      ('loan', '직방 「융자금」 · 다방 「융자금 여부」 둘 다 별이 없다'),
+      ('loanAvailable', '직방 「매물 조건」 체크, 별이 없다'),
+      ('petAllowed', '직방 체크 · 다방 「방 특징(선택)」'),
+      ('heating', '다방 「난방 시설」, 별이 없다'),
+      ('airconType', '다방 「냉방 시설」, 별이 없다'),
+      (HifiField.householdCount, '직방 「총 세대 수」 · 다방 「세대(가구수)」'),
+      (HifiField.entranceType, '다방 「현관 유형」, 별이 없다'),
+      (HifiField.eContract, '직방 「매물 조건」 체크, 별이 없다'),
+      (HifiField.monthlyParkingFee, '두 폼 어디에도 칸이 없다'),
+      (HifiField.ownerName, '직방 「성함 또는 호칭」 — (선택사항)'),
+      ('ownerPhone', '직방 「전화번호」 — (선택사항) · 다방엔 칸이 없다'),
+    ]) {
+      expect(
+        fieldRequired(values, key),
+        isFalse,
+        reason: '$key 는 선택이어야 합니다 ($why).',
+      );
+      expect(
+        fieldVisible(values, key),
+        isTrue,
+        reason: '$key 칸은 그대로 남아 있어야 합니다 ($why).',
+      );
+    }
+
+    // 한 곳이라도 별을 단 줄.
+    for (final (key, why) in [
+      ('violation', '직방 「위반건축물 해당 여부*」'),
+      ('mediationMethod', '직방 「중개 의뢰를 받은 방법*」'),
+      ('unit', '직방 「호*」 (다방은 「호 입력(선택)」)'),
+      ('elevator', '직방 「엘리베이터 유무*」 · 다방 「엘리베이터*」'),
+      ('lh', '다방 「LH 전세임대 여부*」 (직방엔 칸이 없다)'),
+      (HifiField.duplex, '다방 「복층 여부*」'),
+      // 두 폼의 별표를 따르지 않는 하나 — 「층수 비공개」를 켜 놓고 비우면
+      // 다방에 넣을 표기가 없어 실제 층이 그대로 나간다.
+      (HifiField.floorBand, '층수 비공개를 켠 사람에게만 보이는 칸'),
+      ('buildingUse', '다방 「건축물용도*」'),
+      (HifiField.structure, '직방 「구조*」 · 다방 「방 정보*」'),
+      ('parkingCount', '직방 「총 주차대수*」'),
+      ('bathrooms', '직방 「화장실 수*」 · 다방 「욕실 수*」'),
+    ]) {
+      expect(
+        fieldRequired(values, key),
+        isTrue,
+        reason: '$key 는 필수여야 합니다 ($why).',
+      );
+    }
   });
 
   test('Kakao postcode bridge renders in-page instead of opening a window', () {
