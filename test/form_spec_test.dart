@@ -210,6 +210,14 @@ void main() {
       expect(receivedValues, containsPair('address', isNotEmpty));
       // The hi-fi's 구조 + 복층 여부 still reach the adapters as 방 구조.
       expect(receivedValues, containsPair('roomLayout', '오픈형 원룸'));
+      /* 의뢰인 성함·연락처는 **자동 채우기가 비워 둔다.**
+       *
+       * 실제 사람의 번호를 적는 자리다. 예시가 앉아 있으면 연습이 남의 번호를 계정의
+       * 이름으로 조회하게 만들거나, 그대로 올려 엉뚱한 사람의 번호가 광고에 실린다.
+       * 두 곳 다 필수가 아니므로(직방 「(선택사항)」·다방엔 칸이 없다) 비워 두어도
+       * 등록은 그대로 간다 — 바로 위에서 CTA 가 열린 것이 그 증거다. */
+      expect(receivedValues![HifiField.ownerName] ?? '', isEmpty);
+      expect(receivedValues!['ownerPhone'] ?? '', isEmpty);
     },
   );
 
@@ -435,8 +443,8 @@ void main() {
       lessThan(script.indexOf("fillIn('ownerPhone', 'verification.lessorPhone'")),
     );
     // 막는 것이 아니라 알리는 것이다 — 비워 두면 등록은 그대로 된다.
-    expect(script, contains('의뢰인 전화번호: 자동 채우기의 연습용 번호'));
-    expect(script, isNot(contains("miss('ownerPhone.confirm', '자동 채우기")));
+    expect(script, contains('의뢰인 전화번호: 통합 폼 예시의 연습용 번호'));
+    expect(script, isNot(contains("miss('ownerPhone.confirm', '통합 폼 예시")));
     // 실제 번호는 예전 그대로 채워지고 눌린다 — 빗장은 이 한 번호에만 걸린다.
     expect(script, contains("mark('ownerPhone.confirm', true)"));
     expect(script, contains('press(button);'));

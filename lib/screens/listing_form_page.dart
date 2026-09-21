@@ -267,6 +267,15 @@ class _ListingFormPageState extends State<ListingFormPage> {
       'otherFeeNote',
       'mediationNote',
       'ownerPhoneDuplicateNote',
+      /* 의뢰인 성함·연락처는 **자동으로 채우지 않는다.**
+       *
+       * 두 곳 다 필수가 아니고(직방은 그 위에 「(선택사항)」이라 적어 두었다, 다방에는
+       * 칸이 없다), 무엇보다 이 칸은 **실제 사람의 번호**를 적는 자리다. 예시 번호가
+       * 앉아 있으면 연습이 남의 번호를 계정의 이름으로 조회하게 만들거나
+       * ([sampleOwnerPhone]), 그대로 두고 올려 엉뚱한 사람의 번호가 광고에 실린다.
+       * 비워 두면 등록은 그대로 되고, 필요한 사람이 제 손으로 적는다. */
+      'ownerPhone',
+      HifiField.ownerName,
     ]) {
       values.remove(key);
     }

@@ -793,7 +793,7 @@ const _zigbangAdapterBody = r'''
     if (phone === digits(samplePhone)) {
       const box = byName('verification.lessorPhone');
       if (box && digits(box.value)) setValue(box, '');
-      note('의뢰인 전화번호: 자동 채우기의 연습용 번호(' + samplePhone + ')라 넣지 않았습니다. ' +
+      note('의뢰인 전화번호: 통합 폼 예시의 연습용 번호(' + samplePhone + ')라 넣지 않았습니다. ' +
         '넣어 두고 [확인] 을 누르지 않으면 직방이 등록을 막고, 연습으로 [확인] 을 누르면 ' +
         '그 번호가 계정의 이름으로 조회됩니다. 실제 의뢰인 번호를 넣고 [확인] 까지 ' +
         '누르면 「실매물 확인」 뱃지가 붙습니다(선택).');
