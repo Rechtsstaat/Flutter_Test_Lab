@@ -29,12 +29,12 @@ String? mirrorMobileLayoutScript(ListingPlatform platform, Uri pageUrl) {
   final site = platform.siteOf(pageUrl);
   if (site == null) return null;
   final urls = platform.urlsOn(site);
-  final formUrl = Uri.parse(urls.form);
 
   final config = jsonEncode({
     'host': urls.host,
     'root': urls.root,
-    'form': pageDirectory(formUrl),
+    // 직방은 매물에 따라 원룸·빌라·오피스텔 폼이 따로다 — 셋 다 등록 폼이다.
+    'forms': [for (final form in urls.forms) pageDirectory(Uri.parse(form))],
     'profile': platform.name,
     'submitLabels': platform.submitLabels,
   });
@@ -54,7 +54,7 @@ String? mirrorMobileLayoutScript(ListingPlatform platform, Uri pageUrl) {
     directory(location.pathname).startsWith(config.root);
   // The 매물 등록 form is the one page with a surface, a submit bar and chips.
   // Everything else only needs to stop being 1200px wide.
-  const onForm = () => directory(location.pathname) === config.form;
+  const onForm = () => config.forms.includes(directory(location.pathname));
   if (!inScope()) return false;
 
   const styleId = 'flr-mobile-form-layout';

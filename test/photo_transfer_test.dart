@@ -11,17 +11,18 @@ import 'package:jibang_listing_test/photo_transfer.dart';
 void main() {
   late Directory temporary;
   late XFile photo;
+  late List<XFile> photos;
   // 직방은 JPG·PNG 만 받는다. 형식별로 갈리는 자리를 재려면 두 가지가 다 있어야 한다.
   late XFile jpeg;
   setUp(() async {
     temporary = await Directory.systemTemp.createTemp('listing_photos_');
-    final file = File('${temporary.path}/room.png');
-    await file.writeAsBytes(
-      base64Decode(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=',
-      ),
-    );
-    photo = XFile(file.path);
+    photo = XFile((await _png('${temporary.path}/room.png')).path);
+    // 폼은 같은 파일을 두 번 들이지 않고, 진짜 사진인지 바이트를 읽어 본다 — 장수를
+    // 재려면 **서로 다른, 실제로 있는** 사진이라야 한다.
+    photos = [
+      for (var i = 0; i < minListingPhotos; i++)
+        XFile((await _png('${temporary.path}/room-$i.png')).path),
+    ];
     final shot = File('${temporary.path}/room.jpg');
     await shot.writeAsBytes([0xff, 0xd8, 0xff, 0xe0, 7, 7, 7, 7]);
     jpeg = XFile(shot.path);
@@ -598,9 +599,7 @@ void main() {
   testWidgets('사진 5장을 채워야 등록 CTA 가 열리고, 한 장을 빼면 다시 잠긴다', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
-        home: ListingFormPage(
-          pickImages: () async => List.filled(minListingPhotos, photo),
-        ),
+        home: ListingFormPage(pickImages: () async => photos),
       ),
     );
 
@@ -933,3 +932,10 @@ class _ZigbangBridge {
     }
   }
 }
+
+/// 1×1 PNG 한 장을 그 자리에 적는다 — 폼이 바이트를 읽어 보므로 진짜 PNG 라야 한다.
+Future<File> _png(String path) async => File(path)..writeAsBytesSync(
+  base64Decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=',
+  ),
+);

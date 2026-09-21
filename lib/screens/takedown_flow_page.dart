@@ -91,12 +91,14 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
 
   void _open(int index) {
     final platform = _channels[index];
-    _pages[platform] = MirrorListings(
+    final page = _pages[platform] = MirrorListings(
       platform: platform,
       values: widget.listing.values,
       number: _numbers[platform],
       mark: true,
     )..addListener(() => _onPage(platform));
+    // 「광고 종료」를 누르면 플랫폼이 한 번 더 묻는다. 그 물음은 사람이 답한다.
+    attachPlatformDialogs(page, () => context);
     _index = index;
   }
 
@@ -245,8 +247,7 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
                         : StepProgress(
                             total: _channels.length,
                             current: _index + 1,
-                            label:
-                                '광고 종료 ${_index + 1} / ${_channels.length}',
+                            label: '광고 종료 ${_index + 1} / ${_channels.length}',
                             onBack: _back,
                           ),
                   ),

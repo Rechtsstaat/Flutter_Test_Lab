@@ -151,11 +151,12 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
       setState(() {});
       return;
     }
-    _sessions[platform] = MirrorSession(
+    final session = _sessions[platform] = MirrorSession(
       platform: platform,
       values: widget.values,
       photos: widget.photos,
     )..addListener(() => _onSession(platform));
+    attachPlatformDialogs(session, () => context);
     _persist();
   }
 
@@ -236,14 +237,17 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
   void _showListings(ListingPlatform platform) {
     // 빗장이 걸려 있으면 버튼도 없지만, 여기로 오는 다른 길이 생기더라도 닫혀 있게 둔다.
     if (widget.guarded) return;
-    _listingPages.putIfAbsent(
-      platform,
-      () =>
-          MirrorPage(platform: platform, url: Uri.parse(platform.listingsUrl))
-            ..addListener(() {
-              if (mounted) setState(() {});
-            }),
-    );
+    _listingPages.putIfAbsent(platform, () {
+      final page =
+          MirrorPage(
+            platform: platform,
+            url: Uri.parse(platform.listingsUrlFor(widget.values)),
+          )..addListener(() {
+            if (mounted) setState(() {});
+          });
+      attachPlatformDialogs(page, () => context);
+      return page;
+    });
     setState(() {
       _shown = platform;
       _front = _Front.listings;

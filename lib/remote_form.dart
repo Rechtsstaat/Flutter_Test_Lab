@@ -197,264 +197,349 @@ String postcodeBridgeScript(String query) =>
 })();
 ''';
 
+/// 직방 CEO 등록 폼(원룸·빌라·오피스텔)을 채운다.
+///
+/// 실물에서 떠 온 것(2026-09-21): 칸 이름·Radix 부품·관리비 세 갈래(정액 관리비의
+/// 고지 받음/안 받음 · 기타 · 확인 불가)·입주 가능일 달력·의뢰인 전화번호 [확인].
+/// 「광고등록 규정 동의」와 「매물 등록 완료」는 누르지 않는다.
 String zigbangInjectionScript(String payload) =>
-    '''
+    '(async () => {\n  const data = $payload;\n$_zigbangAdapterBody';
 
-(async () => {
-  const data = $payload;
+const _zigbangAdapterBody = r'''
   window.__flrFormDone = false;
   window.__flrPhotosDone = false;
+  /* 어댑터가 누르는 동안 페이지가 되묻는 확인 창은 한방이 「확인」으로 답한다
+   * ([MirrorPage.autoAnswering]). 끝날 때 끈다 — 그 뒤의 확인 창은 사람의 것이다. */
+  const auto = on => { try { if (window.FlrAutoAnswer) window.FlrAutoAnswer.postMessage(on ? 'on' : 'off'); } catch (_) {} };
+  auto(true);
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const output = {applied: 0, missing: [], unsupported: [], verified: 0, violations: []};
-  // These names were read from the published mirror form. Never rely on its
-  // generated Radix ids: they change on every page render.
-  const names = {
-    building: 'dongDetail.dong', unit: 'ho', exclusiveArea: 'sizeM2',
-    residenceDescription: 'residence.residenceTypeDescription',
-    floorAll: 'floorAll', floor: 'floor', approvalDate: 'approveDate',
-    trade: 'sales.salesType', deposit: 'sales.deposit', monthlyRent: 'sales.rent',
-    roomLayout: 'roomType', bathrooms: 'bathroomCnt',
-    directionBase: 'directionCriterionType', direction: 'roomDirection',
-    parkingCount: 'parkingAndHousehold.totalParkingCnt', elevator: 'isElevator',
-    violation: 'nonCompliantBuilding', manageBasis: 'manageCostDetail.manageCostCriteria.manageCostCriteria',
-    managementFee: 'manageCostDetail.basisDetail.avgManageCost',
-    otherFeeReason: 'manageCostDetail.basisDetail.basis', title: 'title',
-    description: 'description', privateMemo: 'secretMemo', moveInDate: 'moveInDate',
-    moveInNegotiable: 'moveInDateExtra', ownerPhone: 'verification.lessorPhone'
+  const publish = () => { try { window.ListingResult.postMessage(JSON.stringify(output)); } catch (_) {} };
+  const note = message => { if (!output.unsupported.includes(message)) output.unsupported.push(message); };
+  const miss = (key, why) => { const line = key + ': ' + why; if (!output.missing.includes(line)) output.missing.push(line); };
+  const ok = () => { output.applied++; output.verified++; };
+  const mark = (key, done, why) => {
+    if (done) ok();
+    else miss(key, why || '폼에서 대상 입력란을 찾거나 선택하지 못했습니다.');
+    return done;
   };
-  const unavailable = {
-    supplyArea: '공급면적: 직방 원룸 폼에 입력란이 없습니다.',
-    salePrice: '매매 금액: 직방 원룸 폼은 매매를 지원하지 않습니다.',
-    floorPrivate: '층수 비공개: 직방 원룸 폼은 실제 층수만 지원합니다.',
-    buildingUse: '건축물 용도: 직방 원룸 폼은 건축물대장 연동으로만 처리하며 법정 용도 선택란이 없습니다.',
-    parkingPerHousehold: '세대당 주차 대수: 직방은 총 주차대수만 지원합니다.',
-    heating: '난방 방식: 직방 원룸 폼에 입력란이 없습니다.',
-    lh: 'LH 전세임대 여부: 직방 원룸 폼에 입력란이 없습니다.',
-    rooms: '방 개수: 직방 원룸 폼은 방 구조로 방 수를 정하며 별도 방 개수 입력란이 없습니다.',
-    unknownFeeReason: '확인 불가 법정 사유: 직방 원룸 폼의 관리비 방식에는 확인 불가 분기가 없습니다.'
-  };
-  const esc = s => (window.CSS && CSS.escape) ? CSS.escape(String(s)) : String(s).replace(/[^a-zA-Z0-9_-]/g, '\\\\\$&');
-  const find = name => document.querySelector('[name="' + esc(name) + '"], #' + esc(name) + ', [data-flr-key="' + esc(name) + '"]');
-  const strict = window.FLR && window.FLR.strict;
-  const strictSet = strict && typeof strict.setValue === 'function' ? strict.setValue.bind(strict) : null;
-  const strictClick = strict && typeof strict.click === 'function' ? strict.click.bind(strict) : null;
-  const press = el => {
-    if (!el) return false;
-    if (strictClick) { strictClick(el); return true; }
-    el.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
-    el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-    el.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}));
-    el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-    el.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-    el.click();
-    return true;
-  };
-  const setValue = (el, value) => {
-    if (!el) return false;
-    if (strictSet) strictSet(el, String(value));
-    const setter = Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value')?.set;
-    if (!strictSet) { if (setter) setter.call(el, String(value)); else el.value = String(value); }
-    ['input', 'change', 'blur'].forEach(type => el.dispatchEvent(new Event(type, {bubbles: true})));
-    return true;
-  };
-  const normalize = value => String(value ?? '').replace(/[ \\t\\r\\n]+/g, '').replace(/향\$/, '').replace(/층\$/, '').replace(/개\$/, '');
-  const exactly = (actual, wanted) => normalize(actual) === normalize(wanted);
-  const matches = (actual, wanted) => {
-    const a = normalize(actual), b = normalize(wanted);
-    return exactly(actual, wanted) || a.includes(b) || b.includes(a);
-  };
-  const waitFor = async (predicate, timeout = 1800) => {
+  const text = el => el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
+  const norm = value => String(value === undefined || value === null ? '' : value).replace(/\s+/g, '');
+  const digits = value => String(value === undefined || value === null ? '' : value).replace(/[^0-9]/g, '');
+  const filled = value => value !== undefined && value !== null && value !== '' &&
+    !(Array.isArray(value) && value.length === 0);
+  const waitFor = async (predicate, timeout = 2000) => {
     const until = Date.now() + timeout;
-    while (Date.now() < until) {
-      const result = predicate();
-      if (result) return result;
+    for (;;) {
+      let value = null;
+      try { value = predicate(); } catch (_) { value = null; }
+      if (value) return value;
+      if (Date.now() >= until) return null;
       await sleep(50);
     }
-    return null;
   };
-  const selectedButton = el => el?.getAttribute('aria-checked') === 'true' || el?.getAttribute('aria-pressed') === 'true' || (el?.classList?.contains('text-orange-500') && el?.classList?.contains('border-orange-500'));
-  const clickCandidate = async el => {
-    if (el) {
-      press(el);
-      ['input','change'].forEach(type => el.dispatchEvent(new Event(type, {bubbles:true})));
-      return !!await waitFor(() => selectedButton(el));
-    }
-    return false;
-  };
-  const clickText = async (name, value) => {
-    // Most radio-like groups repeat the same name on every button.  Prefer
-    // that exact target over a nearby label: the latter can accidentally be a
-    // hidden select belonging to the next field.
-    const named = [...document.querySelectorAll('button[name], [role="radio"][name]')]
-        .find(n => n.getAttribute('name') === name && matches(n.textContent.trim(), value));
-    if (named) return clickCandidate(named);
-    const anchor = find(name);
-    const scope = anchor?.parentElement?.parentElement || anchor?.parentElement || document;
-    return clickCandidate([...scope.querySelectorAll('label,button,[role="radio"],[role="option"]')]
-        .find(n => matches(n.textContent.trim(), value)));
-  };
-  const clickLabel = async (labelText, value) => {
-    const label = [...document.querySelectorAll('label')]
-        .find(n => matches(n.textContent.trim().replace('*', ''), labelText));
-    let scope = label?.parentElement;
-    while (scope && scope !== document.body) {
-      const candidate = [...scope.querySelectorAll('button')]
-          .find(n => matches(n.textContent.trim(), value));
-      if (candidate) return clickCandidate(candidate);
-      scope = scope.parentElement;
-    }
-    return false;
-  };
-  // A Radix Select is a visible trigger plus a hidden native select.  Setting
-  // that native select alone does not call React/Radix's onValueChange.  Open
-  // the trigger, then click the rendered option, and read both representations
-  // back before reporting success.  This also honours the mirror's strict
-  // pointerdown/click ordering and delayed reactions.
-  const choose = async (name, value) => {
-    const el = find(name);
+  const esc = s => (window.CSS && CSS.escape) ? CSS.escape(String(s)) : String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+  const byName = name => document.querySelector('[name="' + esc(name) + '"]');
+  const byId = id => document.getElementById(id);
+
+  /* ── 조작 ───────────────────────────────────────────────────
+   * 직방 CEO 는 Next.js + react-hook-form + Radix 다. 눌림은 사람의 손가락 차례대로
+   * 한 번만 보낸다 — `el.click()` 을 덧붙이면 체크박스가 두 번 뒤집혀 제자리로 돌아온다. */
+  const press = el => {
     if (!el) return false;
-    if (el.tagName === 'SELECT') {
-      const options = [...el.options];
-      const option = options.find(o => exactly(o.textContent.trim(), value) || exactly(o.value, value)) ||
-          options.find(o => matches(o.textContent.trim(), value) || matches(o.value, value));
-      if (!option) return false;
-      const trigger = el.previousElementSibling?.getAttribute('role') === 'combobox'
-          ? el.previousElementSibling
-          : el.parentElement?.querySelector('[role="combobox"]');
-      if (!trigger || trigger.disabled) return false;
-      press(trigger);
-      const list = await waitFor(() => document.querySelector('[data-mirror="listbox"], [role="listbox"]'));
-      if (!list) return false;
-      const renderedOptions = [...list.querySelectorAll('[role="option"]')];
-      const rendered = renderedOptions.find(item => exactly(item.textContent.trim(), option.textContent.trim())) ||
-          renderedOptions.find(item => matches(item.textContent.trim(), option.textContent.trim()));
-      if (!rendered) return false;
-      press(rendered);
-      return !!await waitFor(() =>
-        el.value === option.value &&
-        matches(trigger.textContent.trim(), option.textContent.trim()) &&
-        trigger.getAttribute('aria-expanded') !== 'true',
-      );
-    }
-    return clickText(name, value);
+    const init = {bubbles: true, cancelable: true, composed: true, view: window, button: 0};
+    try { el.dispatchEvent(new PointerEvent('pointerdown', init)); } catch (_) {}
+    el.dispatchEvent(new MouseEvent('mousedown', init));
+    try { el.dispatchEvent(new PointerEvent('pointerup', init)); } catch (_) {}
+    el.dispatchEvent(new MouseEvent('mouseup', init));
+    el.dispatchEvent(new MouseEvent('click', init));
+    return true;
   };
-  const check = async (id, wanted) => {
-    const el = document.getElementById(id);
+  const valueSetter = el => Object.getOwnPropertyDescriptor(
+    el.tagName === 'SELECT' ? HTMLSelectElement.prototype :
+    el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value').set;
+  const setValue = (el, value) => {
     if (!el) return false;
-    const checked = el.getAttribute('aria-checked') === 'true';
-    if (checked !== wanted) press(el);
-    return !!await waitFor(() => (el.getAttribute('aria-checked') === 'true') === wanted);
+    try { el.focus(); } catch (_) {}
+    valueSetter(el).call(el, String(value));
+    ['input', 'change'].forEach(type => el.dispatchEvent(new Event(type, {bubbles: true})));
+    try { el.blur(); } catch (_) {}
+    el.dispatchEvent(new Event('focusout', {bubbles: true}));
+    return true;
   };
-  // 이 어댑터의 clickText·choose·check 는 미러가 선택 상태를 돌려줄 때까지 기다린 뒤에만
-  // true 를 준다. 그래서 「입력됨」은 곧 「확인됨」이다.
-  const mark = (key, ok) => {
-    if (ok) { output.applied++; output.verified++; }
-    else output.missing.push(key + ': 폼에서 대상 입력란을 찾거나 선택하지 못했습니다.');
+  /// 글자 칸. 숫자 칸(금액·면적)은 폼이 「1,000」처럼 다듬어 되돌려 주므로 [same] 으로 견준다.
+  const fillIn = async (key, locate, value, same) => {
+    if (!filled(value)) return false;
+    const el = typeof locate === 'function' ? locate() : byName(locate);
+    if (!el) return mark(key, false, '입력란을 찾지 못했습니다.');
+    if (el.disabled) return mark(key, false, '입력란이 잠겨 있어 값을 넣지 못했습니다.');
+    const wanted = String(value);
+    setValue(el, wanted);
+    const settled = await waitFor(() => {
+      const now = typeof locate === 'function' ? locate() : byName(locate);
+      return now && (same ? same(now.value, wanted) : now.value === wanted) ? now : null;
+    }, 1500);
+    if (settled) return mark(key, true);
+    const now = typeof locate === 'function' ? locate() : byName(locate);
+    return mark(key, false, '넣은 값은 「' + wanted + '」인데 폼은 「' + String(now ? now.value : '').slice(0, 40) + '」로 읽습니다.');
   };
-  const note = message => { if (!output.unsupported.includes(message)) output.unsupported.push(message); };
-  const publish = () => window.ListingResult.postMessage(JSON.stringify(output));
-  const labelled = word => [...document.querySelectorAll('main label')]
-      .find(label => label.textContent.trim().replace('*', '') === word);
+  const sameDigits = (got, wanted) => !!digits(wanted) && digits(got) === digits(wanted);
+  const sameNumber = (got, wanted) => Number(String(got).replace(/,/g, '')) === Number(String(wanted).replace(/,/g, ''));
+  const selected = el => !!el && (el.getAttribute('aria-checked') === 'true' ||
+    el.getAttribute('aria-pressed') === 'true' || el.getAttribute('data-state') === 'checked' ||
+    (el.classList.contains('text-orange-500') && el.classList.contains('border-orange-500')));
+  /// 같은 이름을 나눠 쓰는 단추 묶음(라디오처럼 쓰는 button). 글자가 **정확히** 같은
+  /// 단추를 누른다 — 「해당」과 「해당없음」처럼 한쪽이 다른 쪽을 품는 이름이 있다.
+  const buttonGroup = name => {
+    const first = byName(name);
+    if (!first) return [];
+    let scope = first.parentElement;
+    while (scope && scope !== document.body && scope.querySelectorAll('button').length < 2) scope = scope.parentElement;
+    return scope ? [...scope.querySelectorAll('button')] : [first];
+  };
+  const pick = async (key, name, label) => {
+    if (!filled(label)) return false;
+    const buttons = buttonGroup(name);
+    const target = buttons.find(b => norm(text(b)) === norm(label));
+    if (!target) return mark(key, false, '「' + label + '」 단추를 찾지 못했습니다.');
+    if (!selected(target)) press(target);
+    return mark(key, !!await waitFor(() => selected(target) ? target : null, 2000),
+      '「' + label + '」을 눌렀지만 선택되지 않았습니다.');
+  };
+  /// Radix 체크박스(button[role=checkbox]).
+  const check = async (key, el, wanted) => {
+    if (!el) return mark(key, false, '체크박스를 찾지 못했습니다.');
+    const on = () => el.getAttribute('aria-checked') === 'true';
+    if (on() !== wanted) press(el);
+    return mark(key, !!await waitFor(() => on() === wanted, 2000), '체크 상태가 바뀌지 않았습니다.');
+  };
+  /* Radix Select 는 보이는 단추 + 숨은 <select> 다. 숨은 것만 바꾸면 폼이 모른다 —
+   * 단추를 열고 목록에서 고른 뒤, 숨은 값과 단추 글자를 둘 다 되읽는다. */
+  const openList = () => [...document.querySelectorAll('[role="listbox"]')].find(list => list.offsetParent !== null || list.getClientRects().length) || null;
+  const chooseIn = async (key, locate, label, match) => {
+    if (!filled(label)) return false;
+    // 목록이 바뀌면 숨은 <select> 가 새로 그려진다 — 붙잡아 두지 않고 늘 다시 찾는다.
+    const at = () => typeof locate === 'function' ? locate() : locate;
+    const select = at();
+    if (!select) return mark(key, false, '선택란을 찾지 못했습니다.');
+    const options = [...select.options];
+    const exact = options.find(o => norm(o.textContent) === norm(label));
+    const option = exact || (match ? options.find(o => match(o.textContent.trim(), o.value)) : null);
+    if (!option) {
+      note(key + ' ' + label + ': 직방 선택지에 없습니다 (' + options.map(o => o.textContent.trim()).join(', ').slice(0, 80) + ').');
+      return false;
+    }
+    let trigger = select.previousElementSibling;
+    if (!trigger || trigger.getAttribute('role') !== 'combobox') {
+      let scope = select.parentElement;
+      while (scope && !scope.querySelector('[role="combobox"]')) scope = scope.parentElement;
+      trigger = scope ? scope.querySelector('[role="combobox"]') : null;
+    }
+    // 숨은 <select> 는 아무것도 고르지 않았어도 첫 선택지를 값으로 들고 있다(화장실 수 「1개」).
+    // 폼이 정말 받았는지는 보이는 단추의 글자로 안다.
+    if (select.value === option.value && trigger && norm(text(trigger)) === norm(option.textContent)) {
+      return mark(key, true);
+    }
+    if (!trigger || trigger.disabled) return mark(key, false, '선택 단추가 잠겨 있습니다.');
+    press(trigger);
+    const list = await waitFor(openList, 2000);
+    if (!list) return mark(key, false, '선택 목록이 열리지 않았습니다.');
+    const item = [...list.querySelectorAll('[role="option"]')].find(o => norm(text(o)) === norm(option.textContent));
+    if (!item) {
+      document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+      return mark(key, false, '목록에서 「' + option.textContent.trim() + '」을 찾지 못했습니다.');
+    }
+    press(item);
+    const done = await waitFor(() => {
+      const now = at();
+      return now && now.value === option.value && norm(text(trigger)) === norm(option.textContent);
+    }, 2500);
+    await waitFor(() => !openList(), 1500);
+    return mark(key, !!done, '「' + option.textContent.trim() + '」을 골랐지만 폼이 받지 않았습니다.');
+  };
+  const choose = (key, name, label, match) => chooseIn(key, () => byName(name), label, match);
+  const dialogWith = words => [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')]
+    .find(box => box.getAttribute('data-state') !== 'closed' && words.some(word => text(box).includes(word))) || null;
+
+  const form = /\/ads\/villa\//.test(location.pathname) ? 'villa'
+    : /\/ads\/officetel\//.test(location.pathname) ? 'officetel' : 'oneroom';
+  const rooms = Math.max(1, parseInt(String(data.rooms || '1'), 10) || 1);
+  const bare = (value, suffix) => { let s = String(value === undefined || value === null ? '' : value).trim(); if (s.endsWith(suffix)) s = s.slice(0, -1).trim(); return s; };
+  const won = man => String(Math.round(Number(man) * 10000));
+
   try {
-    if (typeof strict === 'function') {
-      const strictResult = await strict(data);
-      Object.assign(output, strictResult || {});
-      window.ListingResult.postMessage(JSON.stringify(output)); return;
+    /* ⓪ 폼이 열렸는가 — 직방은 **폼을 열어 주지 않을 때가 있다.**
+     *
+     * 실물 확인 2026-09-21: 남은 광고 수량이 없으면 「빌라 매물의 광고수량을 모두
+     * 이용중입니다」, 그 종류의 상품을 사지 않았으면 「오피스텔(도시형생활주택) 매물
+     * 광고상품 구매 후 이용할 수 있습니다」라는 알림창이 뜨고 폼 본문은 **비어 있다.**
+     * 그대로 채우러 들어가면 쉰 줄이 모두 「입력란을 찾지 못했습니다」로 쏟아져, 정작
+     * 사람이 알아야 할 한 가지(수량·상품)가 그 속에 묻힌다. 그래서 먼저 본다. */
+    const shut = dialogWith(['광고수량', '광고상품', '상품 구매', '등록이 불가능']);
+    if (shut || !byName('title')) {
+      miss('폼', shut
+        ? '직방이 이 매물 종류의 등록 폼을 열어 주지 않았습니다: ' + text(shut).slice(0, 200)
+        : '직방 등록 폼이 화면에 없습니다. 로그인과 매물 종류를 확인해 주세요.');
+      publish();
+      window.__flrFormDone = true;
+      auto(false);
+      return;
     }
-    if (strict && typeof strict !== 'function' && !strictSet && !strictClick) output.violations.push('FLR.strict에 호출 가능한 helper가 없어 DOM 대체 입력을 사용했습니다.');
-    for (const [key, reason] of Object.entries(unavailable)) {
-      if (key === 'photoCount' ? Number(data[key]) > 0 : data[key] !== undefined && data[key] !== '') {
-        output.unsupported.push(reason);
+
+    // ① 건물 종류 — 직방은 **건축물 용도**를 묻는다(「중개대상물 종류」는 건축물대장의 용도,
+    //    예) 공동주택·제1종 근린생활시설). 오피스텔 폼은 오피스텔 · 도시형생활주택 · 그 외다.
+    if (form === 'officetel') {
+      await pick('propertyType', 'residence.residenceType', '오피스텔');
+    } else if (data.buildingUse === '단독주택') {
+      await pick('propertyType', 'residence.residenceType', '단독주택');
+    } else if (filled(data.buildingUse)) {
+      if (await pick('propertyType', 'residence.residenceType', '그 외(직접 입력)')) {
+        await waitFor(() => { const el = byName('residence.residenceTypeDescription'); return el && !el.disabled; }, 1500);
+        await fillIn('buildingUse', 'residence.residenceTypeDescription', data.buildingUse);
       }
     }
-    const input = (key, value, transform = v => v) => {
-      if (value === undefined || value === null || value === '') return;
-      const el = find(names[key]);
-      if (!el) return mark(key, false);
-      const wanted = String(transform(value));
-      setValue(el, wanted);
-      if (String(el.value) === wanted) return mark(key, true);
-      output.applied++;
-      output.missing.push(key + ': 값을 넣었지만 폼에서 같은 값을 다시 읽지 못했습니다.');
-    };
-    const choice = (key, value, transform = v => v) => { if (value === undefined || value === null || value === '') return; mark(key, choose(names[key], transform(value))); };
-    // The mirror exposes only 단독주택 and an explicit free-text escape hatch.
-    // Keep the source classification by choosing that documented escape hatch
-    // instead of pretending that a one-room/villa category was selected.
-    const residenceChoice = data.propertyType === '단독주택'
-        ? '단독주택' : '그 외(직접 입력)';
-    mark('propertyType', await clickText('residence.residenceType', residenceChoice));
-    if (residenceChoice === '그 외(직접 입력)') {
-      await sleep(350);
-      input('residenceDescription', data.propertyType);
+
+    // ② 동·호
+    if (data.singleBuilding === true) await check('singleBuilding', byId('haveNoDong'), true);
+    else {
+      await check('singleBuilding', byId('haveNoDong'), false);
+      await fillIn('building', 'dongDetail.dong', bare(data.building, '동'));
     }
-    input('building', data.building); mark('singleBuilding', await check('haveNoDong', data.singleBuilding === true)); input('unit', data.unit);
-    const targetFloor = data.floor === '옥탑' ? '옥탑방' : /^\\d+\$/.test(String(data.floor)) ? data.floor + '층' : data.floor;
-    input('exclusiveArea', data.exclusiveArea); mark('floorAll', await choose(names.floorAll, data.floorAll));
-    // The mirror rebuilds the floor options after the delayed whole-floor
-    // selection.  Retry only after the rebuilt native select is observable.
-    await sleep(650);
-    let floorOk = await choose(names.floor, targetFloor);
-    if (!floorOk) { await sleep(450); floorOk = await choose(names.floor, targetFloor); }
-    mark('floor', floorOk);
-    input('approvalDate', data.approvalDate); mark('trade', await clickText('sales.salesType', data.trade)); await sleep(400); if (data.trade === '월세' || data.trade === '전세') input('deposit', data.deposit); if (data.trade === '월세') input('monthlyRent', data.monthlyRent);
-    mark('shortTerm', await check('isShortTerm', data.shortTerm === true));
-    if (data.loan === '없음') mark('loan', await clickText('noLoan', '융자금 없음'));
-    else if (data.loan === '30%이하' || data.loan === '융자금 30%이하') mark('loan', await clickText('loanUnder30', '융자금 30%이하'));
-    else if (data.loan !== undefined && data.loan !== null && data.loan !== '') output.unsupported.push('융자금 ' + data.loan + ': 직방 원룸 폼는 융자금 없음 또는 30% 이하만 선택할 수 있어 임의 금액을 자동 변환하지 않았습니다.');
-    mark('noManagementFee', await check('no-manage-cost', data.noManagementFee === true));
-    if (data.noManagementFee !== true) { mark('manageMethod', await clickLabel('관리비 부과 방식', data.manageMethod === '기타 부과' ? '기타' : data.manageMethod)); await sleep(400); }
-    if (data.manageMethod === '정액 관리비' && data.noManagementFee !== true) { mark('manageBasis', await choose(names.manageBasis, ({'3개월 평균 관리비':'최근 3개월 관리비 평균','1년 평균 관리비':'최근 1년 관리비 평균','기타 직접 입력':'직접 입력'})[data.manageBasis] || data.manageBasis)); input('managementFee', data.managementFee, v => String(Number(v) * 10000)); }
-    const feeNames = {'인터넷':'인터넷 사용료','유선TV':'TV 사용료','청소비':'일반(공용) 관리비','수도료':'수도료','가스사용료':'가스 사용료','전기료':'전기료','난방비':'난방비'};
-    for (const fee of (data.manageIncludes || [])) { if (feeNames[fee]) mark('manageIncludes.' + fee, await clickText('manageCostDetail.detailIncludes', feeNames[fee])); else output.unsupported.push('관리비 포함 항목 ' + fee + ': 직방 원룸 폼에 대응 항목이 없습니다.'); }
-    if (data.manageMethod === '기타 부과') mark('otherFeeReason', await choose(names.otherFeeReason, ({
-      '면적 및 세대별 부과':'공용관리비는 면적/세대별로 부과하고, 사용료는 사용량에 따른 부과',
-      '전체 세대 균등 부과':'전체 사용량을 세대수로 나누어 부과',
-      '계량기별 실비 부과':'세대별 사용량(별도 계량기)에 따라 부과',
-      '의뢰인 미고지':'중개 의뢰인이 관리비 세부내역 미제시로 관리비 추정 금액 입력',
-      '기타':'직접 입력',
-    })[data.otherFeeReason] || data.otherFeeReason));
-    // 「관리비 실비 부과 세부 내역」은 정액 관리비에서도 필수(*)다. 총액이 10만원 미만인
-    // 것은 입력한 금액에서 그대로 따라오므로 그때만 자동으로 고른다.
-    if (data.manageMethod === '정액 관리비' && data.noManagementFee !== true) {
-      const total = Number(data.managementFee);
-      if (!Number.isNaN(total) && total < 10) mark('basisDetail', await choose(names.otherFeeReason, '관리비 월 10만원 미만'));
-      else note('관리비 실비 부과 세부 내역: 정액 관리비 10만원 이상은 직방이 부과 근거를 따로 고르게 하는데 통합 폼에 대응하는 값이 없어 화면에서 직접 골라 주셔야 합니다.');
+    await fillIn('unit', 'ho', bare(data.unit, '호'));
+
+    // ③ 거래 유형 — 고르면 금액 칸이 그 유형의 틀로 다시 그려진다. 단기는 월세에서만 켜진다.
+    if (await pick('trade', 'sales.salesType', data.trade)) {
+      await waitFor(() => byName(data.trade === '매매' ? 'sales.salesPrice' : 'sales.deposit'), 2000);
+      if (data.trade === '매매') await fillIn('salePrice', 'sales.salesPrice', data.salePrice, sameNumber);
+      else await fillIn('deposit', 'sales.deposit', data.deposit, sameNumber);
+      if (data.trade === '월세') await fillIn('monthlyRent', 'sales.rent', data.monthlyRent, sameNumber);
     }
-    if (data.manageMethod === '정액 관리비' && data.manageDetail) {
-      const detailKeys = {
-        electricity: '전기료', water: '수도료', gas: '가스사용료',
-        heating: '난방비', internet: '인터넷', tv: '유선TV',
-        normalManageCost: '청소비', etcManageCost: '기타'
-      };
-      for (const el of document.querySelectorAll('select[name\$=".type"]')) {
-        const source = Object.keys(detailKeys).find(key => el.name.includes(key));
-        if (!source) continue;
-        const masterValue = data.manageDetail[detailKeys[source]];
-        if (!masterValue) {
-          output.unsupported.push('관리비 세부 ' + detailKeys[source] + ': 통합 폼 값이 없어 입력하지 않았습니다.');
-          continue;
-        }
-        mark('manageDetail.' + detailKeys[source], await choose(el.name, masterValue));
+    if (data.trade === '월세') {
+      await check('shortTerm', byId('isShortTerm'), data.shortTerm === true);
+      if (data.shortTerm === true) {
+        note('단기 매물: 직방은 계약 기간을 따로 받지 않고 상세 설명에 적게 합니다 (' +
+          (data.shortTermMonths || '?') + '개월, ' + (data.shortTermNegotiation || '') + '). 상세 설명에 계약 기간이 있는지 확인해 주세요.');
       }
-      // 「정액」으로 고른 비목은 금액 칸이 켜지고 필수가 된다 — 통합 폼에는 비목별 금액이 없다.
-      const pending = [...document.querySelectorAll('main input[placeholder*="금액"]')]
-          .filter(el => !el.disabled && !el.value).length;
-      if (pending) note('비목별 정액 금액 ' + pending + '칸: 직방은 「정액」으로 고른 비목마다 금액을 따로 요구하지만 통합 폼은 총액만 받아 비워 두었습니다.');
     }
-    mark('roomLayout', await choose(names.roomLayout, ({'오픈형 원룸':'오픈형 원룸 (방1)','분리형 원룸':'분리형 원룸 (방1,거실1)','복층형 원룸':'복층형 원룸'})[data.roomLayout] || data.roomLayout));
-    mark('bathrooms', await choose(names.bathrooms, String(data.bathrooms).replace(' 이상', '개'))); mark('directionBase', await clickText('directionCriterionType', data.directionBase === '주실 기준' ? '거실 기준' : data.directionBase)); mark('direction', await choose(names.direction, data.direction));
-    mark('parking', await check('no-parking', data.parking === '주차 불가능')); if (data.parking === '주차 가능') input('parkingCount', data.parkingCount);
-    mark('elevator', await clickText('isElevator', data.elevator)); mark('violation', await clickText('nonCompliantBuilding', data.violation === '해당 없음' ? '해당없음' : '해당'));
-    mark('loanAvailable', await check('itemConditions.loanLease', data.loanAvailable === '가능')); mark('petAllowed', await check('itemConditions.pet', data.petAllowed === '가능'));
-    const optionLabel = [...document.querySelectorAll('label')].find(label => label.textContent.trim() === '옵션');
-    const optionScope = optionLabel?.parentElement?.parentElement || document;
-    for (const option of (data.appliances || [])) { const button = [...optionScope.querySelectorAll('button')].find(b => b.textContent.trim() === option); if (button) { press(button); if (await waitFor(() => selectedButton(button))) { output.applied++; output.verified++; } else output.missing.push('appliances.' + option + ': 폼에서 선택 상태를 확인하지 못했습니다.'); } else output.unsupported.push('가전·가구 옵션 ' + option + ': 직방 원룸 폼에 대응 옵션이 없습니다.'); }
-    const conditionIds = {'CCTV':'itemConditions.cctv','테라스':'itemConditions.terrace','전기차 충전시설':'itemConditions.evStation'}; for (const item of (data.facilities || [])) { if (conditionIds[item]) { if (await check(conditionIds[item], true)) { output.applied++; output.verified++; } else output.missing.push('facilities.' + item + ': 폼에서 선택 상태를 확인하지 못했습니다.'); } else output.unsupported.push('보안 및 시설 옵션 ' + item + ': 직방 원룸 폼에 대응 옵션이 없습니다.'); }
-    if (data.moveInType === '즉시 입주') mark('moveInType', await check('moveInImmediately', true)); else if (data.moveInType === '날짜 지정') { mark('moveInType', await check('moveInImmediately', false)); input('moveInDate', data.moveInDate); } else output.unsupported.push('입주 방식 협의 가능: 직방 원룸 폼는 즉시 입주 또는 날짜 선택만 지원합니다.');
-    if (data.moveInNegotiable === true) input('moveInNegotiable', '협의 가능');
-    input('title', data.title); input('description', data.description); input('privateMemo', data.privateMemo); input('ownerPhone', data.ownerPhone);
-    for (const message of (window.__flrPostcode ? window.__flrPostcode.notes : [])) note(message);
+
+    // ④ 면적·사용승인일 — 사용승인일은 직방이 오피스텔 대장에서 채울 때 쓰는 모양(yyyyMMdd)으로 넣는다.
+    await fillIn('exclusiveArea', 'sizeM2', data.exclusiveArea, sameNumber);
+    await fillIn('approvalDate', 'approveDate', digits(data.approvalDate), sameDigits);
+
+    // ⑤ 입주 가능일 — 날짜 칸은 읽기 전용이고, 누르면 뜨는 달력 창에서 골라야 폼이 받는다.
+    if (data.moveInType === '즉시 입주') {
+      await check('moveInType', byId('moveInImmediately'), true);
+    } else if (filled(data.moveInDate)) {
+      await check('moveInType', byId('moveInImmediately'), false);
+      await pickMoveInDate(data.moveInDate);
+    }
+    const extra = filled(data.moveInNote) ? String(data.moveInNote) : data.moveInNegotiable === true ? '협의 가능' : '';
+    if (extra) await fillIn('moveInNote', 'moveInDateExtra', extra.slice(0, 10));
+
+    // ⑥ 층 — 전체 층을 고르면 해당 층 목록이 다시 만들어진다.
+    if (await choose('floorAll', 'floorAll', String(data.floorAll) + '층')) {
+      const floorLabel = data.floor === '옥탑' ? '옥탑방' : data.floor === '반지하' ? '반지하' : String(data.floor) + '층';
+      await waitFor(() => { const el = byName('floor'); return el && [...el.options].some(o => norm(o.textContent) === norm(floorLabel)); }, 2500);
+      await choose('floor', 'floor', floorLabel);
+    }
+    if (data.floorPrivate === true) note('층수 비공개: 직방은 해당 층을 그대로 적게 되어 있어 실제 층으로 넣었습니다.');
+
+    // ⑦ 구조 — 폼마다 선택지가 다르다(원룸 · 빌라 · 오피스텔).
+    const oneRoom = data.duplex === '복층' ? '복층형 원룸' : data.structure === '분리형' ? '분리형 원룸 (방1,거실1)' : '오픈형 원룸 (방1)';
+    const layout = form === 'villa' ? (rooms >= 4 ? '포룸+' : rooms === 3 ? '쓰리룸' : '투룸')
+      : form === 'officetel' ? (rooms >= 3 ? '쓰리룸+' : rooms === 2 ? '투룸 (방2,거실1)' : oneRoom)
+      : oneRoom;
+    await choose('roomLayout', 'roomType', layout);
+    if (layout.endsWith('+')) note('구조 ' + layout + ': 직방은 상세 설명에 방 개수를 꼭 적게 합니다 (방 ' + data.rooms + '개).');
+
+    // ⑧ 주실 방향 · 화장실
+    await pick('directionBase', 'directionCriterionType', data.directionBase);
+    await choose('direction', 'roomDirection', String(data.direction || '').replace(/향$/, ''));
+    await choose('bathrooms', 'bathroomCnt', String(data.bathrooms || '').replace(/[^0-9]/g, '') + '개');
+
+    // ⑨ 주차 · 세대 수
+    if (data.parking === '주차 불가능') await check('parking', byId('no-parking'), true);
+    else {
+      await check('parking', byId('no-parking'), false);
+      await fillIn('parkingCount', 'parkingAndHousehold.totalParkingCnt', data.parkingCount, sameNumber);
+    }
+    if (filled(data.householdCount)) {
+      // 「주차 불가능」을 켜면 직방은 총 세대 수 칸도 함께 잠근다(주차 정보의 일부다).
+      if (data.parking === '주차 불가능') note('총 세대 수: 직방은 「주차 불가능」이면 세대 수를 받지 않아 비워 두었습니다(다방에는 들어갑니다).');
+      else await fillIn('householdCount', 'parkingAndHousehold.householdCnt', data.householdCount, sameNumber);
+    }
+    if (filled(data.parkingPerHousehold)) note('세대당 주차 대수: 직방은 총 주차대수만 받습니다.');
+
+    // ⑩ 위반건축물 · 융자금 · 엘리베이터
+    await pick('violation', 'nonCompliantBuilding', data.violation === '위반건축물 해당' ? '해당' : '해당없음');
+    if (data.loan === '없음') await pick('loan', 'noLoan', '융자금 없음');
+    else if (data.loan === '시세 30% 미만') await pick('loan', 'loanUnder30', '융자금 30%이하');
+    else if (filled(data.loan)) note('융자금 ' + data.loan + ': 직방은 「융자금 없음」과 「30% 이하」만 고르게 되어 있어 비워 두었습니다. 상세 설명에 융자금을 적어 주세요.');
+    await pick('elevator', 'isElevator', data.elevator);
+
+    // ⑪ 옵션 — 직방 「옵션」에 있는 것만 누르고, 나머지는 다방(생활 시설)에만 들어간다.
+    const optionLabel = [...document.querySelectorAll('label')].find(label => text(label) === '옵션');
+    let optionScope = optionLabel ? optionLabel.parentElement : null;
+    while (optionScope && optionScope.querySelectorAll('button').length < 12) optionScope = optionScope.parentElement;
+    const optionButtons = optionScope ? [...optionScope.querySelectorAll('button')] : [];
+    const zigbangOptions = ['에어컨', '냉장고', '세탁기', '가스레인지', '인덕션', '전자레인지', '책상', '책장', '침대', '옷장', '신발장', '싱크대'];
+    const wantedOptions = (data.appliances || []).filter(item => zigbangOptions.includes(item));
+    for (const button of optionButtons) {
+      const label = text(button);
+      if (!zigbangOptions.includes(label)) continue;
+      const wanted = wantedOptions.includes(label);
+      if (selected(button) !== wanted) press(button);
+      mark('appliances.' + label, !!await waitFor(() => selected(button) === wanted, 1500), '옵션 선택 상태가 바뀌지 않았습니다.');
+    }
+    const elsewhere = (data.appliances || []).filter(item => !zigbangOptions.includes(item));
+    if (elsewhere.length) note('가전·가구 ' + elsewhere.join(', ') + ': 직방 옵션에 없어 다방에만 들어갑니다.');
+
+    // ⑫ 관리비
+    await fillManageCost();
+
+    // ⑬ 매물 설명
+    await fillIn('title', 'title', data.title);
+    await fillIn('description', 'description', data.description);
+    if (filled(data.privateMemo)) await fillIn('privateMemo', 'secretMemo', data.privateMemo);
+
+    // ⑭ 매물 조건 — 켤 것은 켜고, 끌 것은 끈다.
+    const facilities = data.facilities || [];
+    for (const [id, key, wanted] of [
+      ['itemConditions.pet', 'petAllowed', data.petAllowed === '가능'],
+      ['itemConditions.loanLease', 'loanAvailable', data.loanAvailable === '가능'],
+      ['itemConditions.digitalContract', 'eContract', data.eContract === '가능'],
+      ['itemConditions.cctv', 'facilities.CCTV', facilities.includes('CCTV')],
+      ['itemConditions.terrace', 'facilities.테라스', facilities.includes('테라스')],
+      ['itemConditions.evStation', 'facilities.전기차 충전시설', facilities.includes('전기차 충전시설')],
+    ]) await check(key, byId(id), wanted);
+
+    // ⑮ 중개 의뢰를 받은 방법(필수) — 기타면 방법을 적는 칸이 열린다.
+    if (await pick('mediationMethod', 'mediationRequest.mediationRequestType', data.mediationMethod) &&
+        data.mediationMethod === '기타 방법으로 확인') {
+      await waitFor(() => byName('mediationRequest.mediationRequestTypeDescription'), 1500);
+      await fillIn('mediationNote', 'mediationRequest.mediationRequestTypeDescription', data.mediationNote);
+    }
+
+    // ⑯ 의뢰인 정보 — 전화번호를 넣으면 [확인] 까지 눌러야 등록된다(직방 「실매물 확인」).
+    await fillIn('ownerName', 'verification.lessorName', data.ownerName);
+    await confirmLessor();
+
+    /* ⑰ 직방 폼에 **갈 곳이 없는** 값들 (실물 확인 2026-09-21, 원룸 등록 폼).
+     *
+     * 통합 폼은 두 곳 중 한 곳만 받는 것도 필수로 받는다 — 그래야 한 번 채우면 두 폼이
+     * 모두 끝난다. 그 대신 **어디로 갔는지**는 말해 주어야 한다. 말하지 않으면 사람은
+     * 자기가 적은 난방 방식이 직방 광고에 실렸다고 믿는다. 다방 어댑터도 같은 약속을
+     * 지킨다(「다방 등록 폼에 대응 입력란이 없어 직방에만 들어갑니다」). */
+    for (const [value, what] of [
+      [data.supplyArea, '공급면적'],
+      [data.heating, '난방 방식'],
+      [data.airconType, '에어컨 종류'],
+      [data.roomFeatures, '방 특징'],
+      [data.lh, 'LH 전세임대 여부'],
+      [data.complexName, '단지명'],
+    ]) {
+      if (filled(value)) note(what + ': 직방 등록 폼에 대응 입력란이 없어 다방에만 들어갑니다.');
+    }
 
     /* 사진이 먼저다.
      *
@@ -471,63 +556,316 @@ String zigbangInjectionScript(String payload) =>
       while (window.__flrPhotosDone !== true && Date.now() < until) await sleep(250);
     }
 
-    // 주소 — 직방 미러는 주소 칸을 누르면 카카오 우편번호 창을 띄운다. 브리지가 그 창을
-    // 웹뷰 안 전체 화면 겹으로 바꿔 놓았으므로, 여기서 눌러 주면 사용자가 결과만 고르면 된다.
-    // 고르고 나면 미러가 「소재지 공개 확인」 창을 띄운다 — 매물 대분류로 답이 정해진다.
+    // ⑰ 주소 — 주소 칸을 누르면 카카오 우편번호 창이 뜬다. 브리지가 그 창을 웹뷰 안 전체
+    // 화면 겹으로 바꿔 놓았으므로, 여기서 눌러 주면 결과만 고르면 된다(자동 선택기가 고른다).
     if (data.address) {
       if (window.__flrPostcode) window.__flrPostcode.query = data.address;
-      const lat = find('lat');
-      if (!lat) mark('address', false);
+      const lat = byName('lat');
+      if (!lat) mark('address', false, '주소 칸을 찾지 못했습니다.');
       else {
-        if (!window.__flrZigbangAddressWatch) {
-          const multiUnit = data.propertyType === '다가구주택' ? '예' : '아니요';
-          window.__flrZigbangAddressWatch = new MutationObserver(() => {
-            const dialog = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')]
-                .find(box => box.textContent.includes('소재지 공개 확인'));
-            if (!dialog) return;
-            const answer = [...dialog.querySelectorAll('button')]
-                .find(button => button.textContent.trim() === multiUnit);
-            if (!answer) return;
-            press(answer);
-            const index = output.unsupported.findIndex(message => message.startsWith('매물 기본 주소:'));
-            if (index >= 0) output.unsupported.splice(index, 1);
-            note('소재지 공개 확인: 매물 대분류가 ' + data.propertyType + '이므로 「' + multiUnit + '」로 답했습니다.');
-            if (String(lat.value) !== '') { output.applied++; output.verified++; }
-            publish();
-          });
-          window.__flrZigbangAddressWatch.observe(document.body, {subtree: true, childList: true});
-        }
+        watchAddressDialogs();
         note('매물 기본 주소: 카카오 주소 검색을 띄웠습니다. 자동으로 고르지 못하면 결과를 직접 눌러 주세요. 고르면 직방 주소 칸이 채워집니다.');
         press(lat);
       }
     }
+    for (const message of (window.__flrPostcode ? window.__flrPostcode.notes : [])) note(message);
     for (const violation of (window.__FLR_VIOLATIONS__ || [])) {
       const detail = typeof violation === 'string' ? violation : [violation.kind, violation.target, violation.detail].filter(Boolean).join(': ');
       output.violations.push('깐깐이 위반: ' + detail);
     }
-  } catch (error) { output.violations.push('자동 입력 오류: ' + String(error)); }
+  } catch (error) {
+    output.violations.push('자동 입력 오류: ' + String(error && error.stack ? error.stack : error));
+  }
   // 표식은 어댑터 셋이 같은 약속을 지킨다 ([MirrorSession._adapterDone]). 직방은 위에서
   // 이미 세웠을 수 있으나, 오류로 빠져나온 길에서도 사진은 붙는 편이 낫다.
   window.__flrFormDone = true;
-  window.ListingResult.postMessage(JSON.stringify(output));
+  // 「광고등록 규정 동의」와 「매물 등록 완료」는 누르지 않는다 — 사람의 몫이다.
+  note('광고등록 규정 동의: 직접 읽고 체크해 주세요. 체크해야 등록할 수 있습니다.');
+  publish();
+  // 카카오 창에서 사람이 주소를 고르는 동안까지는 확인 창을 대신 받는다. 주소가 앉거나
+  // 겹이 닫히면 끈다.
+  (async () => {
+    const until = Date.now() + 180000;
+    while (Date.now() < until) {
+      const lat = byName('lat');
+      if ((lat && lat.value) || !(window.__flrPostcode && window.__flrPostcode.open)) break;
+      await sleep(500);
+    }
+    await sleep(1500);
+    auto(false);
+  })();
+
+  /* ── 관리비 ─────────────────────────────────────────────────
+   * 직방은 부과 방식마다 받는 칸이 통째로 다르다(실물 2026-09-21).
+   *  · 정액 관리비 = 부과 기준 + 「세부내역 고지 받았습니까」
+   *      고지 받음   → 일반(공용)·전기·수도·가스·난방·인터넷·TV·기타 관리비 비목별 방식과 금액
+   *      고지 안 받음 → 월 평균 관리비 + 포함 항목
+   *    — 「정액 부과되는 관리비가 월 10만원 이상인 경우에만 해당」이다.
+   *  · 기타 = 부과 기준 + 월 평균 관리비 + 포함 항목 + 실비 부과 세부 내역
+   *    — 「정액 관리비 10만원 미만이거나 관리 규약 등에 따라 부과되는 경우」다.
+   *  · 확인 불가 = 사유 */
+  async function fillManageCost() {
+    if (data.noManagementFee === true) { await check('noManagementFee', byId('no-manage-cost'), true); return; }
+    await check('noManagementFee', byId('no-manage-cost'), false);
+    const tier = data.manageMethod === '정액 관리비' ? data.feeTier : null;
+    const kind = data.manageMethod === '확인 불가' ? '확인 불가'
+      : (tier === '10만원 이상' || tier === '10만원 이상 (세부내역 미고지)') ? '정액 관리비' : '기타';
+    const kindButton = [...document.querySelectorAll('main button')].find(b => text(b) === kind);
+    if (!kindButton) { mark('manageMethod', false, '관리비 부과 방식 「' + kind + '」 단추를 찾지 못했습니다.'); return; }
+    if (!selected(kindButton)) press(kindButton);
+    if (!mark('manageMethod', !!await waitFor(() => selected(kindButton), 2000), '「' + kind + '」을 눌렀지만 선택되지 않았습니다.')) return;
+    await sleep(300);
+
+    if (kind === '확인 불가') {
+      const reason = {
+        '단독주택 사유': '건축법 시행령 별표1의 제1호 가목의 단독주택',
+        '상가 건물 사유': '오피스텔 제외 상가 건물에 해당하는 경우',
+        '미등기·신축 건물 사유': '미등기건물, 신축건물 등 관리비 내역이 확인불가한 경우',
+      }[data.unknownFeeReason];
+      await waitFor(() => byName('manageCostDetail.reason'), 2000);
+      await choose('unknownFeeReason', 'manageCostDetail.reason', reason);
+      return;
+    }
+
+    const criteria = {
+      '직전월 관리비 기준': '직전월 관리비 기준', '3개월 평균 관리비': '최근 3개월 관리비 평균',
+      '1년 평균 관리비': '최근 1년 관리비 평균', '기타 직접 입력': '직접 입력',
+    }[data.manageBasis];
+    await waitFor(() => byName('manageCostDetail.manageCostCriteria.manageCostCriteria'), 2000);
+    if (await choose('manageBasis', 'manageCostDetail.manageCostCriteria.manageCostCriteria', criteria) && criteria === '직접 입력') {
+      await waitFor(() => { const el = byName('manageCostDetail.manageCostCriteria.manageCostCriteriaEtcDescription'); return el && !el.disabled; }, 1500);
+      await fillIn('manageBasisNote', 'manageCostDetail.manageCostCriteria.manageCostCriteriaEtcDescription', data.manageBasisNote);
+    }
+
+    const includeNames = {
+      '일반(공용) 관리비': '일반(공용) 관리비', '전기': '전기료', '수도': '수도료', '가스': '가스 사용료',
+      '난방': '난방비', '인터넷': '인터넷 사용료', 'TV': 'TV 사용료', '기타 관리비': '기타 관리비',
+    };
+    const includes = async name => {
+      await waitFor(() => byName(name), 2000);
+      const wanted = (data.manageIncludes || []).map(item => includeNames[item]).filter(Boolean);
+      for (const button of buttonGroup(name)) {
+        const label = text(button);
+        if (!Object.values(includeNames).includes(label)) continue;
+        const on = wanted.includes(label);
+        if (selected(button) !== on) press(button);
+        mark('manageIncludes.' + label, !!await waitFor(() => selected(button) === on, 1500), '포함 항목 선택 상태가 바뀌지 않았습니다.');
+      }
+    };
+
+    if (kind === '기타') {
+      await fillIn('managementFee', 'manageCostDetail.basisDetail.avgManageCost', won(data.managementFee), sameNumber);
+      await includes('manageCostDetail.detailIncludes');
+      const basis = tier === '10만원 미만' ? '관리비 월 10만원 미만' : {
+        '관리규약에 따라 부과': '관리규약에 따라 부과',
+        '면적 및 세대별 부과': '공용관리비는 면적/세대별로 부과하고, 사용료는 사용량에 따른 부과',
+        '전체 세대 균등 부과': '전체 사용량을 세대수로 나누어 부과',
+        '계량기별 실비 부과': '세대별 사용량(별도 계량기)에 따라 부과',
+        '기타': '직접 입력',
+      }[data.otherFeeReason];
+      if (await choose('otherFeeReason', 'manageCostDetail.basisDetail.basis', basis) && basis === '직접 입력') {
+        await waitFor(() => { const el = byName('manageCostDetail.basisDetail.basisEtcDescription'); return el && !el.disabled; }, 1500);
+        await fillIn('otherFeeNote', 'manageCostDetail.basisDetail.basisEtcDescription', data.otherFeeNote);
+      }
+      return;
+    }
+
+    // 정액 관리비 — 고지 받았는가.
+    const informed = tier === '10만원 이상';
+    const radio = byId(informed ? 'true' : 'false');
+    if (!radio) { mark('feeTier', false, '「의뢰인으로부터 관리비 세부내역에 대해」 선택지를 찾지 못했습니다.'); return; }
+    if (radio.getAttribute('aria-checked') !== 'true') press(radio);
+    if (!mark('feeTier', !!await waitFor(() => radio.getAttribute('aria-checked') === 'true', 2000), '고지 여부를 고르지 못했습니다.')) return;
+    await sleep(300);
+
+    if (!informed) {
+      await fillIn('managementFee', 'manageCostDetail.totalAmount', won(data.managementFee), sameNumber);
+      await includes('manageCostDetail.detail.normalManageCost.type');
+      return;
+    }
+    const item = key => (data.manageDetail && data.manageDetail[key]) || {};
+    const way = {'정액': '정액', '실비': '실비', '해당 없음': '해당없음'};
+    const common = item('일반(공용) 관리비');
+    await choose('manageDetail.일반(공용) 관리비', 'manageCostDetail.detail.normalManageCost.type', way[common.type]);
+    await fillIn('manageDetail.일반(공용) 관리비.amount', 'manageCostDetail.detail.normalManageCost.amount', common.amount, sameNumber);
+    for (const [key, field] of [['전기', 'electricity'], ['수도', 'water'], ['가스', 'gas'], ['난방', 'heating'], ['인터넷', 'internet'], ['TV', 'tv']]) {
+      const entry = item(key);
+      const base = 'manageCostDetail.detail.usageFee.' + field;
+      await choose('manageDetail.' + key, base + '.type', way[entry.type]);
+      if (entry.type === '정액') {
+        await waitFor(() => { const el = byName(base + '.amount'); return el && !el.disabled; }, 1500);
+        await fillIn('manageDetail.' + key + '.amount', base + '.amount', entry.amount, sameNumber);
+      }
+    }
+    // 기타 관리비 — 이름 없는 선택란이라 「기타 관리비」 줄에서 찾는다.
+    const etc = item('기타 관리비');
+    const etcSelect = () => {
+      const desc = byName('manageCostDetail.detail.etcManageCost.description');
+      let scope = desc ? desc.parentElement : null;
+      while (scope && !scope.querySelector('select')) scope = scope.parentElement;
+      return scope ? scope.querySelector('select') : null;
+    };
+    await chooseIn('manageDetail.기타 관리비', etcSelect, etc.type === '있음' ? '직접 입력' : '해당없음');
+    if (etc.type === '있음') {
+      await waitFor(() => { const el = byName('manageCostDetail.detail.etcManageCost.description'); return el && !el.disabled; }, 1500);
+      await fillIn('manageDetail.기타 관리비.note', 'manageCostDetail.detail.etcManageCost.description', etc.note);
+      await fillIn('manageDetail.기타 관리비.amount', 'manageCostDetail.detail.etcManageCost.amount', etc.amount, sameNumber);
+    }
+  }
+
+  /* ── 입주 가능일 달력 ────────────────────────────────────────
+   * 칸을 누르면 달력 창이 뜨고, 날짜를 누른 뒤 「2026년 10월 1일로 선택」을 눌러야 폼이
+   * 「2026.10.01 이후」를 받는다(실물 번들 MoveInDateField). */
+  async function pickMoveInDate(value) {
+    const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return mark('moveInDate', false, '입주가능일 형식이 YYYY-MM-DD 가 아닙니다.');
+    const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+    const input = byName('moveInDate');
+    if (!input || input.disabled) return mark('moveInDate', false, '입주 가능일 칸이 잠겨 있습니다.');
+    press(input);
+    const box = await waitFor(() => dialogWith(['로 선택', '날짜를 선택해 주세요']), 2500);
+    if (!box) return mark('moveInDate', false, '달력 창이 열리지 않았습니다.');
+    const shown = () => {
+      const caption = [...box.querySelectorAll('[role="status"], [aria-live], .rdp-caption_label, [class*="caption"]')]
+        .map(text).find(t => /\d{4}/.test(t)) || '';
+      const numeric = caption.match(/(\d{4})\D+(\d{1,2})/);
+      if (numeric) return [Number(numeric[1]), Number(numeric[2])];
+      const names = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+      const english = caption.toLowerCase().match(/([a-z]+)\s+(\d{4})/);
+      if (english && names.includes(english[1])) return [Number(english[2]), names.indexOf(english[1]) + 1];
+      return null;
+    };
+    const navButton = next => [...box.querySelectorAll('button')].find(b => {
+      const label = (b.getAttribute('aria-label') || b.getAttribute('name') || '').toLowerCase();
+      return next ? /next|다음/.test(label) : /previous|prev|이전/.test(label);
+    });
+    for (let step = 0; step < 72; step++) {
+      const now = shown();
+      if (!now) break;
+      const diff = (year - now[0]) * 12 + (month - now[1]);
+      if (diff === 0) break;
+      const nav = navButton(diff > 0);
+      if (!nav || nav.disabled) break;
+      press(nav);
+      await sleep(120);
+    }
+    const now = shown();
+    if (!now || now[0] !== year || now[1] !== month) {
+      return mark('moveInDate', false, '달력을 ' + year + '년 ' + month + '월로 넘기지 못했습니다.');
+    }
+    // 앞뒤 달에서 넘어온 날은 제 class 에 day-outside 를 단다(칸의 class 에도 그 글자가
+    // 선택자로 들어 있으니 단추 제 것만 본다).
+    const days = [...box.querySelectorAll('button[name="day"], button[role="gridcell"]')]
+      .filter(b => text(b) === String(day) && !b.classList.contains('day-outside') &&
+        b.getAttribute('aria-disabled') !== 'true' && !b.disabled);
+    if (!days.length) return mark('moveInDate', false, day + '일을 누를 수 없습니다.');
+    press(days[0]);
+    const confirm = await waitFor(() => [...box.querySelectorAll('button')].find(b => /로 선택$/.test(text(b)) && !b.disabled), 1500);
+    if (!confirm) return mark('moveInDate', false, '날짜를 눌렀지만 「…로 선택」이 켜지지 않았습니다.');
+    press(confirm);
+    return mark('moveInDate', !!await waitFor(() => {
+      const el = byName('moveInDate');
+      return el && el.value.includes(year + '년') && el.value.includes(month + '월') && el.value.includes(day + '일');
+    }, 2000), '달력에서 골랐지만 입주 가능일 칸이 바뀌지 않았습니다.');
+  }
+
+  /* ── 의뢰인 전화번호 [확인] ───────────────────────────────────
+   * 직방은 전화번호를 넣고 [확인] 을 누르지 않으면 「‘실매물 확인' 표시 노출을 위해서는,
+   * 전화번호를 [확인]해 주셔야 합니다」로 등록을 막는다. [확인] 은 직방이 그 번호가
+   * 집주인 번호로 쓸 수 있는지(중개사 번호·중복 여부)만 묻는 것이다. */
+  async function confirmLessor() {
+    if (!filled(data.ownerPhone)) return;
+    const phone = digits(data.ownerPhone);
+    if (!await fillIn('ownerPhone', 'verification.lessorPhone', phone, sameDigits)) return;
+    const field = byName('verification.lessorPhone');
+    // 「의뢰인 정보」 묶음 전체를 본다 — 답(확인되었습니다 · 중복 사유)은 단추 옆이 아니라
+    // 그 아래에 새로 그려진다.
+    let section = field ? field.parentElement : null;
+    while (section && !/의뢰인 정보/.test(section.textContent || '')) section = section.parentElement;
+    const button = section ? [...section.querySelectorAll('button')].find(b => text(b) === '확인') : null;
+    if (!button) return mark('ownerPhone.confirm', false, '전화번호 옆 [확인] 단추를 찾지 못했습니다.');
+    await waitFor(() => !button.disabled, 1500);
+    if (button.disabled) return mark('ownerPhone.confirm', false, '[확인] 단추가 잠겨 있습니다.');
+    press(button);
+    // 답은 셋 중 하나로 보인다 — 「확인되었습니다」, 칸 아래 오류 글, 또는 **숨어 있던**
+    // 중복 사유 묶음이 드러난다(그 묶음은 늘 문서에 있고 class 로만 숨는다).
+    const visible = el => !!el && !!(el.offsetParent || el.getClientRects().length);
+    const duplicateBox = () => {
+      const head = document.querySelector('[name="verification.duplicatedLessor.reasonType"]');
+      return head && visible(head) ? head : null;
+    };
+    const said = await waitFor(() => {
+      if (duplicateBox()) return 'duplicate';
+      const lines = [...section.querySelectorAll('p, span, div')].filter(el => el.childElementCount === 0 && visible(el)).map(text);
+      if (lines.some(line => /확인되었습니다/.test(line))) return 'ok';
+      const error = lines.find(line => /중개사가 아닌|형식이 올바르지|검증할 수 없습니다|잠시 후 다시/.test(line));
+      return error ? 'error:' + error : null;
+    }, 8000);
+    if (!said) return mark('ownerPhone.confirm', false, '[확인] 을 눌렀지만 직방의 답이 오지 않았습니다. 화면에서 [확인] 을 다시 눌러 주세요.');
+    if (said.startsWith('error:')) return mark('ownerPhone', false, '직방이 전화번호를 받지 않았습니다: ' + said.slice(6));
+    mark('ownerPhone.confirm', true);
+    if (said !== 'duplicate') return;
+    // 이미 다른 매물에 쓰인 번호면 사유(필수)를 고르게 한다.
+    const reasonId = {
+      '의뢰인 다주택 보유': 'MULTIPLE_OWNER', '법인 소유': 'CORPORATE_OWNER',
+      '관리인·대리인 위임': 'AGENT_DELEGATION', '기타': 'ETC',
+    }[data.ownerPhoneDuplicateReason];
+    if (!reasonId) {
+      miss('ownerPhoneDuplicateReason', '직방이 이미 다른 매물에 쓰인 번호라며 중복 사유(필수)를 묻습니다. 통합 폼에 사유가 없어 비워 두었으니 화면에서 골라 주세요.');
+      return;
+    }
+    const radio = await waitFor(() => byId(reasonId), 2000);
+    if (!radio) return mark('ownerPhoneDuplicateReason', false, '중복 사유 선택지를 찾지 못했습니다.');
+    if (radio.getAttribute('aria-checked') !== 'true') press(radio);
+    if (!mark('ownerPhoneDuplicateReason', !!await waitFor(() => radio.getAttribute('aria-checked') === 'true', 2000), '중복 사유를 고르지 못했습니다.')) return;
+    if (reasonId === 'ETC') {
+      await waitFor(() => byName('verification.duplicatedLessor.reason'), 1500);
+      await fillIn('ownerPhoneDuplicateNote', 'verification.duplicatedLessor.reason', data.ownerPhoneDuplicateNote);
+    }
+  }
+
+  /// 주소를 고른 뒤 직방이 띄우는 창 — 오피스텔·아파트 주소면 원룸 폼에서 받지 않는다.
+  function watchAddressDialogs() {
+    if (window.__flrZigbangAddressWatch) return;
+    window.__flrZigbangAddressWatch = new MutationObserver(() => {
+      const box = dialogWith(['아파트 주소로 확인', '오피스텔(도시형생활주택)입니다', '광고수량', '등록이 불가능', '상품을 구매']);
+      if (!box || box.__flrSeen) return;
+      box.__flrSeen = true;
+      const said = text(box).slice(0, 200);
+      miss('address', '직방이 이 주소를 이 폼으로 받지 않는다고 합니다: ' + said);
+      publish();
+    });
+    window.__flrZigbangAddressWatch.observe(document.body, {subtree: true, childList: true});
+  }
 })();
 ''';
 
+/// 다방프로 등록 폼(`/form/room`)을 채운다.
+///
+/// 실물에서 떠 온 것(2026-09-21): 대분류 셋과 소분류, 단독·다가구의 「건물 유형」,
+/// 오피스텔·아파트의 단지 검색(시/도→시/군/구→동, 선택지 value 가 법정동 코드 앞자리)과
+/// 평형, 월 관리비 상세입력 창의 세 탭과 정액관리비 세 구간, 단기임대 계약기간,
+/// 저/중/고 표기, 시설 체크, 연락처. 「등록 완료」·「임시저장」은 누르지 않는다.
 String dabangInjectionScript(String payload) =>
-    '''
-(async () => {
-  const data = $payload;
+    '(async () => {\n  const data = $payload;\n$_dabangAdapterBody';
+
+const _dabangAdapterBody = r'''
   // 사진은 폼이 다 채워진 뒤에 붙는다. 시작할 때 내려 두지 않으면 앞선 시도가 세워 둔
   // 표식을 보고 사진이 폼 입력과 나란히 달린다.
   window.__flrFormDone = false;
+  /* 어댑터가 누르는 동안 다방이 되묻는 확인 창(「매물 유형을 변경할 경우 매물정보가
+   * 초기화 됩니다」, 관리비 탭 전환 등)은 한방이 「확인」으로 답한다([MirrorPage.autoAnswering]).
+   * 답하지 않으면 WebView 는 늘 「취소」로 답해 다방이 아무것도 바꾸지 않는다. */
+  const auto = on => { try { if (window.FlrAutoAnswer) window.FlrAutoAnswer.postMessage(on ? 'on' : 'off'); } catch (_) {} };
+  auto(true);
   const output = {applied: 0, missing: [], unsupported: [], verified: 0, violations: []};
-  const publish = () => window.ListingResult.postMessage(JSON.stringify(output));
+  const publish = () => { try { window.ListingResult.postMessage(JSON.stringify(output)); } catch (_) {} };
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   // 깐깐이(mirror 의 엄격 층)는 click/input/change 를 삼켰다가 0.3초 뒤에 다시 쏜다.
   // 그래서 조작 하나하나의 반응을 기다려야 한다.
   const REACT = 420;
-  const text = el => el ? (el.textContent || '').replace(/\\s+/g, ' ').trim() : '';
-  const norm = value => String(value === undefined || value === null ? '' : value).replace(/\\s+/g, '');
+  const text = el => el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
+  const norm = value => String(value === undefined || value === null ? '' : value).replace(/\s+/g, '');
   const filled = value => value !== undefined && value !== null && value !== '' &&
     !(Array.isArray(value) && value.length === 0);
   const note = message => { if (!output.unsupported.includes(message)) output.unsupported.push(message); };
@@ -592,12 +930,16 @@ String dabangInjectionScript(String payload) =>
     el.tagName === 'SELECT' ? HTMLSelectElement.prototype :
     el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
     'value').set;
+  /* 초점 사건은 **직접** 보낸다. 다방의 날짜 칸(사용승인일·입주 가능 일자)은 칸을 떠날 때
+   * (focusout) 비로소 폼에 값을 넘기는데, 화면 뒤에 있는 웹뷰에서는 el.focus()·el.blur()
+   * 가 아무 일도 하지 않는다 — 문서가 초점을 갖고 있지 않아서다(실물 2026-09-21: 칸에는
+   * 「20180301」이 보이는데 폼은 빈 날짜로 알았다). */
   const setNative = (el, value) => {
     if (!el) return false;
-    el.focus && el.focus();
+    el.dispatchEvent(new FocusEvent('focusin', {bubbles: true}));
     valueSetter(el).call(el, String(value));
     ['input', 'change'].forEach(type => el.dispatchEvent(new Event(type, {bubbles: true})));
-    el.blur && el.blur();
+    el.dispatchEvent(new FocusEvent('focusout', {bubbles: true}));
     return true;
   };
   const press = el => {
@@ -773,14 +1115,60 @@ String dabangInjectionScript(String payload) =>
     return box && norm(text(box)).includes(norm(title)) ? box : null;
   };
   const modalButton = (box, wanted) =>
-    [...box.querySelectorAll('button')].find(button => norm(text(button)) === norm(wanted));
+    box ? [...box.querySelectorAll('button')].find(button => norm(text(button)) === norm(wanted)) : null;
+  const bare = (value, suffix) => { let s = String(value === undefined || value === null ? '' : value).trim(); if (s.endsWith(suffix)) s = s.slice(0, -1).trim(); return s; };
+  /// value 로 고른다 — 다방 선택란은 value 가 코드(THIRTY_UNDER · LAST_MONTH …)라 글자보다 확실하다.
+  const selectValue = async (key, locate, value, timeout = 2600) => {
+    if (!filled(value)) return false;
+    if (!at(locate)) { miss(key, '다방 폼에서 선택란을 찾지 못했습니다.'); return false; }
+    const el = await ready(locate, timeout);
+    if (!el) { miss(key, '선택란이 아직 잠겨 있어 고르지 못했습니다.'); return false; }
+    if (![...el.options].some(option => option.value === String(value))) {
+      note(key + ': 다방 선택지에 「' + value + '」이(가) 없습니다.');
+      return false;
+    }
+    if (el.value === String(value)) { ok(); remember(key, el, () => { const now = at(locate); return !!now && now.value === String(value); }, () => { const now = at(locate); if (now && !now.disabled) setNative(now, value); }); return true; }
+    setNative(el, value);
+    if (await waitUntil(() => { const now = at(locate); return now && now.value === String(value); }, 1500)) {
+      ok();
+      remember(key, el,
+        () => { const now = at(locate); return !!now && now.value === String(value); },
+        () => { const now = at(locate); if (now && !now.disabled) setNative(now, value); });
+      await sleep(REACT);
+      return true;
+    }
+    output.applied++;
+    miss(key, '고른 뒤 폼에서 같은 값을 다시 읽지 못했습니다.');
+    return false;
+  };
 
   /* ── 주소 ───────────────────────────────────────────────────
-   * 「검색」은 카카오 우편번호 화면을 띄운다(브리지가 웹뷰 안 전체 화면 겹으로 그린다).
-   * 결과를 고르면 미러가 도로명·지번을 채우고 동/호 칸을 켜고 건축물대장 창을 띄운다.
-   * 그 순간을 관찰해 동/호를 자동으로 넣고, 대장 창은 「직접 입력」으로 닫는다 —
-   * 대장 조회는 이미 넣은 면적·용도·승인일을 공공데이터 값으로 덮어쓰기 때문이다. */
+   * 주택/빌라 — 「검색」은 카카오 우편번호 화면을 띄운다(브리지가 웹뷰 안 전체 화면 겹으로
+   * 그린다). 결과를 고르면 다방이 폼을 처음 상태로 되돌리고(매물유형·방 수·거래 종류만
+   * 남긴다) 동/호 칸을 켜고 건축물대장 창을 띄운다. 대장 창은 「직접 입력」으로 닫는다 —
+   * 대장 조회는 이미 넣은 면적·용도·승인일을 공공데이터 값으로 덮어쓰기 때문이다.
+   * 오피스텔·아파트 — 주소 대신 시/도→시/군/구→동→단지를 고른다([enterComplexAddress]). */
   const addressCell = () => cellOf('room_info', '매물 주소');
+  const addressInput = name => () => {
+    const now = addressCell();
+    return now ? now.querySelector('input[name="' + name + '"]') : null;
+  };
+  /// 「등기부등본 상에 ‘동’ 정보가 없을 경우 체크」
+  const noDongBox = () => {
+    const cell = addressCell();
+    if (!cell) return null;
+    const label = [...cell.querySelectorAll('label')].find(l => /동.{0,3}정보가 없을 경우/.test(text(l)));
+    return label ? label.querySelector('input[type="checkbox"]') : null;
+  };
+  const fillUnit = async () => {
+    if (data.singleBuilding === true) {
+      if (noDongBox()) await toggle('singleBuilding', noDongBox, true, '동 정보 없음');
+    } else {
+      if (noDongBox() && noDongBox().checked) await toggle('singleBuilding', noDongBox, false, '동 정보 없음');
+      fill('building', addressInput('dong'), bare(data.building, '동'));
+    }
+    fill('unit', addressInput('ho'), bare(data.unit, '호'));
+  };
   const afterAddressPicked = () => {
     const cell = addressCell();
     if (!cell) return;
@@ -801,17 +1189,10 @@ String dabangInjectionScript(String payload) =>
     window.__flrDabangAddress = picked;
     for (const bucket of [output.missing, output.unsupported]) {
       for (let i = bucket.length - 1; i >= 0; i--) {
-        if (/^(매물 기본 주소|동 정보|호수 정보):/.test(bucket[i])) bucket.splice(i, 1);
+        if (/^(매물 기본 주소|address|building|unit|동 정보|호수 정보):/.test(bucket[i])) bucket.splice(i, 1);
       }
     }
-    // 자리는 노드가 아니라 함수로 넘긴다 — 폼이 다시 그려지면 붙잡아 둔 노드는 유령이
-    // 되고, [reconcile] 이 그 유령에게 값을 물어 「멀쩡하다」고 속는다.
-    const addressInput = name => () => {
-      const now = addressCell();
-      return now ? now.querySelector('input[name="' + name + '"]') : null;
-    };
-    fill('building', addressInput('dong'), data.building);
-    fill('unit', addressInput('ho'), data.unit);
+    fillUnit();
     output.applied++;
     output.verified++;
     publish();
@@ -834,7 +1215,11 @@ String dabangInjectionScript(String payload) =>
       if (spot && records.every(record => spot.contains(record.target))) return;
       afterAddressPicked();
       // 본 차례가 이미 끝난 뒤에 주소가 도착했다면, 그 되돌림을 맞출 사람이 없다.
-      if (settled && !replaying) { settled = false; reconcile().then(() => { settled = true; }); }
+      if (settled && !replaying) {
+        settled = false;
+        auto(true);
+        reconcile().then(() => { settled = true; setTimeout(() => auto(false), 1500); });
+      }
     });
     window.__flrDabangAddressWatch.observe(document.body, {
       subtree: true, childList: true, attributes: true, attributeFilter: ['disabled'],
@@ -863,122 +1248,268 @@ String dabangInjectionScript(String payload) =>
     return true;
   };
 
-  /* ── 월 관리비 상세입력 창 ─────────────────────────────────── */
-  const FEE_INCLUDES = {
-    '청소비': '공용 관리비', '승강기유지비': '공용 관리비', '주차비': '공용 관리비', '경비비': '공용 관리비',
-    '전기료': '전기', '수도료': '수도', '가스사용료': '가스', '난방비': '난방',
-    '인터넷': '인터넷', '유선TV': 'TV', '기타': '기타 관리비',
+  /* ── 오피스텔·아파트 단지 ─────────────────────────────────────
+   * 시/도 → 시/군/구 → 동/읍/면 을 고르면 그 동의 단지 목록이 뜬다. 선택지의 value 가
+   * **법정동 코드의 앞자리**다(시/도 2자리 · 시/군/구 5자리 · 동 8자리, 실물 2026-09-21) —
+   * 카카오가 준 법정동 코드로 고르면 이름을 견줄 필요가 없다. 목록에는 단지 이름만
+   * 있어서(주소가 없다) 단지는 통합 폼의 단지명으로 고른다. */
+  const SIDO = {
+    '서울': '서울특별시', '부산': '부산광역시', '대구': '대구광역시', '인천': '인천광역시',
+    '광주': '광주광역시', '대전': '대전광역시', '울산': '울산광역시', '세종': '세종특별자치시',
+    '경기': '경기도', '강원': '강원특별자치도', '충북': '충청북도', '충남': '충청남도',
+    '전북': '전북특별자치도', '전남': '전라남도', '경북': '경상북도', '경남': '경상남도',
+    '제주': '제주특별자치도',
+  };
+  const complexKey = value => norm(String(value || '').replace(/\([^)]*\)/g, '')).toLowerCase();
+  const enterComplexAddress = async () => {
+    const code = digits(data.legalDongCode);
+    const regionSelect = name => () => { const cell = addressCell(); return cell ? cell.querySelector('select[name="' + name + '"]') : null; };
+    const levels = [
+      ['city', 2, [SIDO[data.sido] || data.sido]],
+      ['gu', 5, [data.sigungu]],
+      ['dong', 8, [data.bname]],
+    ];
+    for (const [name, width, names] of levels) {
+      const el = await waitUntil(() => { const s = regionSelect(name)(); return s && !s.disabled && s.options.length > 1 ? s : null; }, 6000);
+      if (!el) { miss('address', '단지 검색의 ' + name + ' 선택란이 준비되지 않았습니다.'); return false; }
+      const options = [...el.options].filter(o => o.value !== '');
+      const option = (code.length >= width && options.find(o => o.value === code.slice(0, width))) ||
+        options.find(o => names.some(n => filled(n) && norm(text(o)) === norm(n))) ||
+        options.find(o => names.some(n => filled(n) && (norm(n).includes(norm(text(o))) || norm(text(o)).includes(norm(n)))));
+      if (!option) { miss('address', '주소 「' + data.address + '」에 맞는 ' + name + ' 선택지를 찾지 못했습니다.'); return false; }
+      if (!await selectValue('address.' + name, regionSelect(name), option.value, 6000)) return false;
+    }
+    const search = () => { const cell = addressCell(); return cell ? cell.querySelector('input[placeholder="단지검색"]') : null; };
+    const input = await waitUntil(() => { const s = search(); return s && !s.disabled ? s : null; }, 6000);
+    if (!input) { miss('address', '단지검색 칸이 열리지 않았습니다.'); return false; }
+    // 목록은 칸에 초점이 가야 뜨고, 글자를 넣으면 그 글자로 좁혀진다.
+    input.focus();
+    input.dispatchEvent(new FocusEvent('focus', {bubbles: false}));
+    input.dispatchEvent(new FocusEvent('focusin', {bubbles: true}));
+    const wanted = complexKey(data.complexName || data.buildingName);
+    if (!wanted) { miss('address', '단지명이 없어 다방 단지 목록에서 고를 수 없습니다.'); return false; }
+    setNative(input, String(data.complexName || data.buildingName).replace(/\([^)]*\)/g, '').trim());
+    input.dispatchEvent(new FocusEvent('focusin', {bubbles: true}));
+    const list = await waitUntil(() => {
+      const cell = addressCell();
+      const items = cell ? [...cell.querySelectorAll('ul[class*=SearchList] > li')] : [];
+      return items.length ? items : null;
+    }, 8000);
+    if (!list) { miss('address', '단지 목록이 나타나지 않았습니다. 단지명 「' + (data.complexName || '') + '」을 확인해 주세요.'); return false; }
+    const exact = list.filter(li => complexKey(text(li)) === wanted);
+    const partial = list.filter(li => complexKey(text(li)).includes(wanted) || wanted.includes(complexKey(text(li))));
+    const item = exact.length === 1 ? exact[0] : exact.length === 0 && partial.length === 1 ? partial[0] : null;
+    if (!item) {
+      miss('address', '단지 후보 ' + (exact.length || partial.length || list.length) + '개 중 「' + (data.complexName || '') +
+        '」 하나를 확정하지 못했습니다(' + (exact.length ? exact : partial.length ? partial : list).slice(0, 5).map(text).join(', ') + '). 화면에서 직접 골라 주세요.');
+      return false;
+    }
+    press(item);
+    const picked = await waitUntil(() => {
+      const cell = addressCell();
+      const summary = cell && cell.querySelector('[class*=AddressList]');
+      return summary && complexKey(text(summary)).includes(complexKey(text(item))) ? summary : null;
+    }, 6000);
+    if (!picked) { miss('address', '「' + text(item) + '」 단지를 눌렀지만 주소가 확정되지 않았습니다.'); return false; }
+    ok();
+    await sleep(REACT);
+    await fillUnit();
+    await pickComplexSpace();
+    return true;
+  };
+  /// 평형 — 선택지는 「79B (79.93㎡ / 59.94㎡)」처럼 공급/전용이다. 통합 폼의 전용·공급면적과
+  /// 가장 가까운 것을 고르되, 전용이 1㎡ 넘게 어긋나면 고르지 않는다.
+  const pickComplexSpace = async () => {
+    const locate = () => { const cell = cellOf('room_info', '매물 크기'); return cell ? cell.querySelector('select[name="complexSpaceSeq"]') : null; };
+    const el = await waitUntil(() => { const s = locate(); return s && !s.disabled && s.options.length > 1 ? s : null; }, 6000);
+    if (!el) { miss('exclusiveArea', '평형 선택란이 준비되지 않았습니다.'); return false; }
+    const exclusive = Number(data.exclusiveArea), supply = Number(data.supplyArea);
+    let best = null;
+    for (const option of [...el.options].filter(o => o.value !== '')) {
+      const m = text(option).match(/\(([\d.]+)㎡\s*\/\s*([\d.]+)㎡\)/);
+      if (!m) continue;
+      const [s, e] = [Number(m[1]), Number(m[2])];
+      const score = Math.abs(e - exclusive) + (Number.isNaN(supply) ? 0 : Math.abs(s - supply) / 2);
+      if (Math.abs(e - exclusive) <= 1 && (!best || score < best.score)) best = {option, score};
+    }
+    if (!best) {
+      miss('exclusiveArea', '전용 ' + data.exclusiveArea + '㎡ 에 맞는 평형이 없습니다(' +
+        [...el.options].filter(o => o.value !== '').map(text).slice(0, 6).join(', ') + '). 화면에서 평형을 골라 주세요.');
+      return false;
+    }
+    return selectValue('exclusiveArea', locate, best.option.value);
+  };
+
+  /* ── 월 관리비 상세입력 창 ─────────────────────────────────────
+   * 부과방식 세 탭 — 정액관리비(10만원 미만 · 10만원 이상 · 10만원 이상 세부내역 미고지),
+   * 기타부과(E01~E04 · E99), 확인불가(U01~U03). 탭·구간을 바꾸면 다방이 confirm 으로
+   * 되묻는다(한방이 「확인」으로 답한다). 「확인」 단추는 창이 값을 다 받아야 켜진다. */
+  const INCLUDE_CODES = {
+    '일반(공용) 관리비': 'PUBLIC_USE_RATES', '전기': 'ELECTRIC_RATES', '수도': 'WATER_RATES', '가스': 'GAS_RATES',
+    '난방': 'HEATING_RATES', '인터넷': 'INTERNET_RATES', 'TV': 'TV_RATES', '기타 관리비': 'ETC_USE_RATES',
+  };
+  const BASIS = {
+    '직전월 관리비 기준': 'LAST_MONTH', '3개월 평균 관리비': 'LAST_THREE_MONTH_AVG',
+    '1년 평균 관리비': 'LAST_ONE_YEAR_AVG', '기타 직접 입력': 'ETC',
   };
   const completeFeeModal = async () => {
-    const box = await waitUntil(() => modal('월 관리비 상세입력'));
-    if (!box) { miss('managementFee', '「관리비 있음」 뒤에 상세입력 창이 열리지 않았습니다.'); return; }
-    const method = data.manageMethod === '기타 부과' ? '기타부과'
-      : data.manageMethod === '확인 불가' ? '확인불가' : '정액관리비';
-    const tab = modalButton(box, method);
-    if (tab) { press(tab); await sleep(REACT + 200); } else miss('manageMethod', '상세입력 창에서 「' + method + '」 탭을 찾지 못했습니다.');
+    const box = () => modal('월 관리비 상세입력');
+    if (!await waitUntil(box)) { miss('managementFee', '「관리비 있음」 뒤에 상세입력 창이 열리지 않았습니다.'); return; }
+    const inBox = selector => () => { const b = box(); return b ? b.querySelector(selector) : null; };
+    const radio = value => inBox('input[type="radio"][value="' + value + '"]');
+    // 창 안의 줄(li)은 제목 칸(.th)의 글자로 찾는다.
+    const row = title => () => {
+      const b = box();
+      // 필수 줄은 제목 뒤에 「*」가 붙는다(「관리비*」·「구분*」).
+      return b ? [...b.querySelectorAll('li')].find(li => { const th = li.querySelector('.th'); return th && norm(text(th)).replace(/\*/g, '') === norm(title); }) || null : null;
+    };
+    const inRow = (title, selector, index = 0) => () => { const r = row(title)(); return r ? r.querySelectorAll(selector)[index] || null : null; };
+    const method = data.manageMethod === '기타 부과' ? '기타부과' : data.manageMethod === '확인 불가' ? '확인불가' : '정액관리비';
+    const tab = modalButton(box(), method);
+    if (!tab) { miss('manageMethod', '상세입력 창에서 「' + method + '」 탭을 찾지 못했습니다.'); return; }
+    press(tab);
+    await sleep(REACT);
+    const tier = data.feeTier === '10만원 이상' ? 'ABOVE_FIXED_FEE_THRESHOLD'
+      : data.feeTier === '10만원 이상 (세부내역 미고지)' ? 'ABOVE_FIXED_FEE_THRESHOLD_NO_DETAILS' : 'BELOW_FIXED_FEE_THRESHOLD';
+    if (method === '정액관리비') {
+      await toggle('feeTier', radio(tier), true, '정액관리비 ' + data.feeTier);
+      await sleep(REACT);
+    } else if (method === '기타부과') {
+      await waitUntil(() => { const b = box(); return b && [...b.querySelectorAll('select option')].some(o => o.value === 'E01'); });
+    } else {
+      await waitUntil(inBox('select[name="detailCode"]'));
+    }
 
     if (method !== '확인불가') {
-      const total = Number(data.managementFee);
-      if (!filled(data.managementFee) || Number.isNaN(total)) {
-        // 다방은 정액·기타 어느 쪽이든 총액이 있어야 「확인」이 켜진다.
-        note('관리비 총액: 다방 상세입력 창은 부과 방식과 상관없이 총액을 요구하지만 통합 폼에 금액이 없어 창을 저장하지 않았습니다.');
-        const close = modalButton(box, '닫기');
-        if (close) press(close);
-        return;
+      const basis = BASIS[data.manageBasis];
+      if (basis) {
+        await toggle('manageBasis', radio(basis), true, '관리비 기준');
+        if (basis === 'ETC') {
+          await sleep(REACT);
+          const basisRow = () => { const r = radio('ETC')(); let li = r ? r.closest('li') : null; return li; };
+          fill('manageBasisNote', () => { const li = basisRow(); return li ? li.querySelector('input[type="text"]') : null; }, data.manageBasisNote);
+        }
       }
-      fill('managementFee', () => box.querySelector('input[name="detailCost"]'), data.managementFee, v => String(Number(v) * 10000));
+    }
+    const includes = async () => {
+      for (const [item, code] of Object.entries(INCLUDE_CODES)) {
+        const wanted = (data.manageIncludes || []).includes(item);
+        const box = inBox('input[type="checkbox"][value="' + code + '"]');
+        if (!box()) { if (wanted) miss('manageIncludes.' + item, '포함 항목 「' + item + '」 칸을 찾지 못했습니다.'); continue; }
+        if (box().checked !== wanted) await toggle('manageIncludes.' + item, box, wanted, '포함 항목 ' + item);
+        else if (wanted) ok();
+      }
+    };
+    const won = man => String(Math.round(Number(man) * 10000));
+
+    if (method === '정액관리비' && tier === 'BELOW_FIXED_FEE_THRESHOLD') {
+      fill('managementFee', inBox('input[name="detailCost"]'), won(data.managementFee));
+      await includes();
+    } else if (method === '정액관리비' && tier === 'ABOVE_FIXED_FEE_THRESHOLD') {
+      const item = key => (data.manageDetail && data.manageDetail[key]) || {};
+      const common = item('일반(공용) 관리비');
+      await toggle('manageDetail.일반(공용) 관리비', inRow('공용 관리비', 'input[type="radio"][value="' + (common.type === '실비' ? 'ACTUAL_EXPENSE' : 'FIXED_FEE') + '"]'), true, '공용 관리비 부과 방식');
       await sleep(REACT);
-      if (method === '정액관리비') {
-        // 10만원 미만/이상은 입력한 총액에서 그대로 따라온다.
-        await choose('managementFee.threshold', () => box, total >= 10 ? '10만원 이상' : '10만원 미만');
-        const basis = {
-          '직전월 관리비 기준': '직전 월 관리비',
-          '3개월 평균 관리비': '최근 3개월 관리비 평균',
-          '1년 평균 관리비': '최근 1년 관리비 평균',
-          '기타 직접 입력': '기타',
-        }[data.manageBasis];
-        if (basis) await choose('manageBasis', () => box, basis);
-        else if (filled(data.manageBasis)) note('관리비 부과 기준 ' + data.manageBasis + ': 다방 상세입력 창에 대응하는 기준이 없습니다.');
+      fill('manageDetail.일반(공용) 관리비.amount', inRow('공용 관리비', 'input[name="detailCost"]'), digits(common.amount));
+      for (const [key, title] of [['전기', '전기'], ['수도', '수도'], ['가스', '가스'], ['난방', '난방비'], ['인터넷', '인터넷'], ['TV', 'TV']]) {
+        const entry = item(key);
+        const fixed = entry.type === '정액';
+        await toggle('manageDetail.' + key, inRow(title, 'input[type="radio"][value="' + (fixed ? 'FIXED_FEE' : 'ACTUAL_EXPENSE') + '"]'), true, key + ' 부과 방식');
+        if (fixed) { await sleep(REACT); fill('manageDetail.' + key + '.amount', inRow(title, 'input[name="detailCost"]'), digits(entry.amount)); }
+        if (entry.type === '해당 없음') note('관리비 ' + key + ' 해당 없음: 다방은 비목마다 정액·실비만 받아 「실비」로 넣었습니다.');
       }
-      if (method === '기타부과' && filled(data.otherFeeReason)) {
-        await select('otherFeeReason', () => [...box.querySelectorAll('select')]
-            .find(el => [...el.options].some(option => option.textContent.includes('관리규약 등에 따라 부과'))), {
-          '관리규약에 따라 부과': '관리규약 등에 따라 부과',
-          '면적 및 세대별 부과': '공용 관리비는 면적/세대별로 부과하고 사용료는 사용량에 따른 부과',
-          '전체 세대 균등 부과': '전체 사용량을 세대수로 나누어 부과',
-          '계량기별 실비 부과': '세대별 사용량(별도 계량기)에 따라 부과',
-          '의뢰인 미고지': '정액관리비이지만 중개의뢰인이 세부내역 미고지한 경우',
-          '기타': '기타',
-        }[data.otherFeeReason] || data.otherFeeReason);
+      const etc = item('기타 관리비');
+      await toggle('manageDetail.기타 관리비', inRow('기타 관리비', 'input[type="radio"][value="' + (etc.type === '있음' ? 'has' : 'none') + '"]'), true, '기타 관리비 여부');
+      if (etc.type === '있음') {
+        await sleep(REACT);
+        await toggle('manageDetail.기타 관리비.way', inRow('기타 관리비', 'input[type="radio"][value="FIXED_FEE"]'), true, '기타 관리비 부과 방식');
+        await sleep(REACT);
+        fill('manageDetail.기타 관리비.amount', inRow('기타 관리비', 'input[name="detailCost"]'), digits(etc.amount));
+        fill('manageDetail.기타 관리비.note', () => {
+          const r = row('기타 관리비')();
+          return r ? [...r.querySelectorAll('input[type="text"]')].find(i => i.name !== 'detailCost') || null : null;
+        }, etc.note);
       }
-      const seen = new Set();
-      for (const item of (data.manageIncludes || [])) {
-        const target = FEE_INCLUDES[item];
-        if (!target) { note('관리비 포함 항목 ' + item + ': 다방 상세입력 창에 대응 항목이 없습니다.'); continue; }
-        if (seen.has(target)) continue;
-        seen.add(target);
-        await choose('manageIncludes.' + item, () => box, target);
+    } else if (method === '정액관리비') {
+      await selectValue('manageMethod.noDetails', () => { const b = box(); return b ? [...b.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'E98')) || null : null; }, 'E98');
+      fill('managementFee', inRow('관리비', 'input[type="text"]'), won(data.managementFee));
+      await includes();
+    } else if (method === '기타부과') {
+      const code = {
+        '관리규약에 따라 부과': 'E01', '면적 및 세대별 부과': 'E02', '전체 세대 균등 부과': 'E03',
+        '계량기별 실비 부과': 'E04', '기타': 'E99',
+      }[data.otherFeeReason];
+      const codeSelect = () => { const b = box(); return b ? [...b.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'E01')) || null : null; };
+      await selectValue('otherFeeReason', codeSelect, code);
+      if (code === 'E99') {
+        await sleep(REACT);
+        fill('otherFeeNote', () => { const s = codeSelect(); const cell = s ? s.closest('.td') : null; return cell ? cell.querySelector('input[type="text"]') : null; }, data.otherFeeNote);
       }
+      fill('managementFee', inRow('관리비', 'input[type="text"]'), won(data.managementFee));
+      await includes();
+    } else {
+      const code = {'단독주택 사유': 'U01', '상가 건물 사유': 'U02', '미등기·신축 건물 사유': 'U03'}[data.unknownFeeReason];
+      await selectValue('unknownFeeReason', inBox('select[name="detailCode"]'), code);
     }
 
     const confirm = await waitUntil(() => {
-      const button = modalButton(box, '확인');
+      const button = modalButton(box(), '확인');
       return button && !button.disabled ? button : null;
-    });
+    }, 3000);
     if (!confirm) {
       miss('managementFee', '상세입력 값을 넣었지만 「확인」이 켜지지 않았습니다. 창을 열어 둔 채 두었으니 직접 확인해 주세요.');
       return;
     }
     press(confirm);
-    if (await waitUntil(() => !modal('월 관리비 상세입력'))) ok();
+    if (await waitUntil(() => !box(), 3000)) ok();
     else miss('managementFee', '「확인」을 눌렀지만 상세입력 창이 닫히지 않았습니다.');
   };
 
   /* ── 매물유형 ──────────────────────────────────────────────── */
   const PROPERTY = {
-    '오픈형 원룸': ['주택', '빌라/연립/다세대'], '분리형 원룸': ['주택', '빌라/연립/다세대'],
-    '복층형 원룸': ['주택', '빌라/연립/다세대'], '투룸 빌라': ['주택', '빌라/연립/다세대'],
-    '쓰리룸 이상 빌라': ['주택', '빌라/연립/다세대'], '단독주택': ['주택', '단독주택'],
+    '빌라/연립/다세대': ['주택', '빌라/연립/다세대'], '단독주택': ['주택', '단독주택'],
     '다가구주택': ['주택', '다가구주택'], '상가주택': ['주택', '상가주택'],
-    '오피스텔 원룸형': ['오피스텔', null], '오피스텔 분리/투룸형': ['오피스텔', null],
-    '아파트': ['아파트', null],
+    '오피스텔': ['오피스텔', null], '아파트': ['아파트', null],
   };
   let complexProperty = false;
+  /// 지금 골라져 있는 대분류 — 소분류 줄의 글자로 안다(주택/빌라는 네다섯 칸, 오피스텔·
+  /// 아파트는 한 칸이다). 대분류 단추 자체에는 골라졌다는 표식이 없다.
+  const currentMajor = () => {
+    const labels = [...(rowOf('room_info', '매물유형') || document).querySelectorAll('label')].map(text);
+    if (labels.some(l => l.startsWith('빌라/연립/다세대'))) return '주택';
+    if (labels.some(l => l.startsWith('오피스텔'))) return '오피스텔';
+    if (labels.some(l => l.startsWith('아파트'))) return '아파트';
+    return null;
+  };
   const applyPropertyType = async () => {
     const mapping = PROPERTY[data.propertyType];
     if (!mapping) {
-      note('매물 대분류 ' + data.propertyType + ': 다방 주거용 매물 등록 폼에 대응하는 유형이 없습니다.');
+      miss('propertyType', '매물 종류 「' + data.propertyType + '」는 다방 주거용 매물 등록 폼에 대응하는 유형이 없습니다.');
       return false;
     }
     const [major, minor] = mapping;
-    // 대분류는 소분류 라디오(주택/빌라)나 단지 검색 칸(오피스텔·아파트)의 유무로 알아본다.
-    const isHouse = () => !!document.querySelector('#room_info input[name="buildingType"]');
     const majorButton = () => [...(rowOf('room_info', '매물유형') || document).querySelectorAll('button')]
       .find(item => norm(text(item)).startsWith(norm(major)));
-    const selected = button => !!button && (
-      button.getAttribute('aria-pressed') === 'true' || button.getAttribute('aria-selected') === 'true' ||
-      /(^|[\\s_-])(active|selected|checked|on)([\\s_-]|\$)/i.test(button.className || '') ||
-      !!button.querySelector('input:checked'));
-    // 주택/비주택 DOM만 보면 아파트와 오피스텔을 구분할 수 없다. 선택 표식이
-    // 확실하지 않은 비주택 버튼은 다시 눌러도 멱등이므로 눌러 목표 대분류를 보장한다.
-    const button = majorButton();
-    const mustSwitch = major === '주택' ? !isHouse() : isHouse() || !selected(button);
-    if (mustSwitch) {
+    if (currentMajor() !== major) {
+      const button = majorButton();
       if (!button) { miss('propertyType', '대분류 「' + major + '」 버튼을 찾지 못했습니다.'); return false; }
       press(button);
-      // 대분류를 바꾸면 매물 정보·추가 정보의 7개 행이 통째로 다시 그려진다.
-      await waitUntil(() => (major === '주택') === isHouse(), 3000);
+      // 대분류를 바꾸면 다방이 「매물정보가 초기화 됩니다」로 되묻고, 7개 행이 다시 그려진다.
+      if (!await waitUntil(() => currentMajor() === major, 4000)) {
+        miss('propertyType', '대분류 「' + major + '」를 눌렀지만 바뀌지 않았습니다.');
+        return false;
+      }
       await sleep(REACT);
     }
     // 주소가 폼을 되돌리면 대분류부터 풀린다. 그러면 뒤의 값들은 있을 자리가 없으므로
     // 이것을 가장 먼저 적어 둔다 — [reconcile] 은 적어 둔 순서대로 되돌린다.
-    remember('propertyType', button,
-      () => (major === '주택') === isHouse(),
+    remember('propertyType', majorButton(),
+      () => currentMajor() === major,
       async () => {
         const again = majorButton();
         if (!again) return;
         press(again);
-        await waitUntil(() => (major === '주택') === isHouse(), 3000);
+        await waitUntil(() => currentMajor() === major, 4000);
       });
     if (!minor) {
       complexProperty = true;
@@ -986,89 +1517,13 @@ String dabangInjectionScript(String payload) =>
       return true;
     }
     // 소분류 라디오는 매물유형 행의 두 번째 칸에 있다.
-    return choose('propertyType', () => rowOf('room_info', '매물유형'), minor);
-  };
-
-  // 아파트·오피스텔은 카카오 우편번호 대신 시/도 → 시/군/구 → 동 → 단지를
-  // 차례로 고른다. 통합 주소에 들어 있는 지역명과 카카오가 돌려준 건물명을 쓴다.
-  const enterComplexAddress = async major => {
-    if (!filled(data.address)) return false;
-    const wantedAddresses = [data.address, data.roadAddress, data.jibunAddress]
-      .filter(filled).map(norm);
-    const wantedAddress = wantedAddresses.join('|');
-    const wantedBuilding = norm(data.buildingName);
-    const selectAt = index => {
-      const cell = addressCell();
-      return cell ? cell.querySelectorAll('select')[index] : null;
-    };
-    for (let index = 0; index < 3; index++) {
-      const element = await waitUntil(() => {
-        const candidate = selectAt(index);
-        return candidate && !candidate.disabled && candidate.options.length > 1 ? candidate : null;
-      }, 5000);
-      if (!element) {
-        miss('address', major + ' 단지 검색의 ' + (index + 1) + '번째 지역 선택란이 준비되지 않았습니다.');
-        return false;
-      }
-      const option = [...element.options].filter(item => item.value !== '')
-        .find(item => wantedAddress.includes(norm(text(item))) || wantedAddress.includes(norm(item.value)));
-      if (!option) {
-        miss('address', '주소 「' + data.address + '」에 맞는 ' + (index + 1) + '번째 지역 선택지를 찾지 못했습니다.');
-        return false;
-      }
-      if (!await select('address.region.' + index, () => selectAt(index), option.value, 5000)) return false;
+    const done = await choose('propertyType', () => rowOf('room_info', '매물유형'), minor);
+    // 단독·다가구는 「건물 유형」을 묻는다 — 방 하나(건물 일부)를 내놓는 것이다.
+    if (done && (minor === '단독주택' || minor === '다가구주택')) {
+      await sleep(REACT);
+      await choose('propertyType.unit', () => cellOf('room_info', '건물 유형'), '건물 일부');
     }
-
-    const list = await waitUntil(() => {
-      const cell = addressCell();
-      const items = cell ? [...cell.querySelectorAll('ul[class*=SearchList] > li')] : [];
-      return items.length ? items : null;
-    }, 8000);
-    if (!list) {
-      miss('address', major + ' 단지 목록이 검색 뒤에도 나타나지 않았습니다.');
-      return false;
-    }
-    const searchable = candidate => norm([
-      text(candidate), candidate.getAttribute('title'), candidate.getAttribute('aria-label'),
-      ...[...candidate.attributes].filter(attribute => attribute.name.startsWith('data-'))
-        .map(attribute => attribute.value),
-    ].filter(Boolean).join(' '));
-    const addressMatches = list.filter(candidate => wantedAddresses.some(address => {
-      const value = searchable(candidate);
-      return value.includes(address) || address.includes(value);
-    }));
-    const named = wantedBuilding ? list.filter(candidate => {
-      const value = norm(text(candidate));
-      return value === wantedBuilding || value.includes(wantedBuilding) || wantedBuilding.includes(value);
-    }) : [];
-    const namedAndAddressed = named.filter(candidate => addressMatches.includes(candidate));
-    // 검색 결과 자체의 유일한 도로명/지번, 주소+건물명의 유일한 교집합,
-    // 유일한 건물명, 전체 유일 후보만 자동 선택한다. 여러 후보를 임의로 누르면
-    // 검증 시점에는 이미 잘못된 단지가 폼에 반영되므로 첫 후보 fallback은 금지한다.
-    const item = addressMatches.length === 1 ? addressMatches[0]
-      : namedAndAddressed.length === 1 ? namedAndAddressed[0]
-      : named.length === 1 ? named[0]
-      : list.length === 1 ? list[0]
-      : null;
-    if (!item) {
-      miss('address', major + ' 단지 후보 ' + list.length + '개 중 주소와 건물명으로 하나를 확정할 수 없습니다. 화면에서 직접 골라 주세요.');
-      return false;
-    }
-    press(item.querySelector('button, label, a') || item);
-    const picked = await waitUntil(() => {
-      const cell = addressCell();
-      const summary = cell && cell.querySelector('[class*=AddressList]');
-      return summary && ((wantedBuilding && norm(text(summary)).includes(wantedBuilding)) ||
-        wantedAddresses.some(address => norm(text(summary)).includes(address) ||
-          address.includes(norm(text(summary))))) ? summary : null;
-    }, 5000);
-    if (!picked) {
-      miss('address', '「' + data.buildingName + '」 단지를 눌렀지만 주소가 확정되지 않았습니다.');
-      return false;
-    }
-    ok();
-    afterAddressPicked();
-    return true;
+    return done;
   };
 
   try {
@@ -1080,17 +1535,12 @@ String dabangInjectionScript(String payload) =>
 
     /* ② 주소 — **여기서 끝까지 받는다.**
      *
-     * 예전에는 검색어만 넣어 두고 카카오 화면은 맨 마지막(⑱)에 띄웠다. 전체 화면 겹이
-     * 다른 입력을 가리기 때문이었는데, 그 대가가 컸다: 주소를 고르는 순간 다방이 폼을
-     * 처음 상태로 되돌려 그때까지 채운 것이 **전부** 사라졌다(실물 실측 2026-09-20 —
-     * 43건을 넣고 41건을 되읽어 확인했는데 사람 눈에는 주소와 동·호만 남았다).
-     * 되돌리는 쪽을 먼저 지나가면 뒤의 값들이 살아남는다.
-     *
-     * 사람이 직접 고를 수도 있어 넉넉히 기다리되, 흐름 전체의 3분을 다 쓰지는 않는다.
+     * 주소를 고르는 순간 다방이 폼을 처음 상태로 되돌려 그때까지 채운 것이 사라진다
+     * (실물 실측 2026-09-20). 되돌리는 쪽을 먼저 지나가면 뒤의 값들이 살아남는다.
      * 끝내 안 오면 멈추지 않고 나머지를 채운다 — 늦게 도착하는 주소는 [watchAddress] 가
      * 듣고, 그때 [reconcile] 이 다시 맞춘다. */
     if (complexProperty) {
-      await enterComplexAddress(PROPERTY[data.propertyType][0]);
+      await enterComplexAddress();
       afterAddressPicked();
     } else if (filled(data.address)) {
       const keyword = addressCell() && addressCell().querySelector('input[name="keyword"]');
@@ -1101,14 +1551,16 @@ String dabangInjectionScript(String payload) =>
       await pickAddress();
     }
 
-    // ③ 면적 — 평/㎡ 두 칸이 짝이다. ㎡ 칸에 넣으면 미러가 평을 계산한다.
-    const sizeCell = () => cellOf('room_info', '매물 크기');
-    const areaInput = (heading, name) => () => {
-      const group = groupOf(sizeCell(), heading);
-      return group ? group.querySelectorAll('input[name="' + name + '"]')[1] : null;
-    };
-    fill('exclusiveArea', areaInput('전용면적', 'room'), data.exclusiveArea);
-    fill('supplyArea', areaInput('공급면적(선택)', 'supply'), data.supplyArea);
+    // ③ 면적 — 평/㎡ 두 칸이 짝이다. ㎡ 칸에 넣으면 다방이 평을 계산한다. 단지는 평형으로 받았다.
+    if (!complexProperty) {
+      const sizeCell = () => cellOf('room_info', '매물 크기');
+      const areaInput = (heading, name) => () => {
+        const group = groupOf(sizeCell(), heading);
+        return group ? group.querySelectorAll('input[name="' + name + '"]')[1] : null;
+      };
+      fill('exclusiveArea', areaInput('전용면적', 'room'), data.exclusiveArea);
+      fill('supplyArea', areaInput('공급면적(선택)', 'supply'), data.supplyArea);
+    }
 
     // ④ 건축물 용도·승인
     const pick = (section, label, selector, index = 0) => () => {
@@ -1121,28 +1573,34 @@ String dabangInjectionScript(String payload) =>
     fill('approvalDate', pick('room_info', '건축물승인', 'input[type="text"]'),
       data.approvalDate, v => String(v).replace(/-/g, ''), sameDigits);
 
-    // ⑤ 방 정보 — 방 수를 넣어야 방 거실 형태·방 특징이 켜진다.
-    // 방 수를 넣으면 미러가 이 행을 통째로 다시 그린다 — 뒤의 자리는 반드시 새로 찾는다.
+    // ⑤ 방 정보 — 방 수를 넣어야 방 거실 형태·방 특징이 켜진다. 방 거실 형태는 방이 하나일 때만 묻는다.
     const roomGroup = heading => () => groupOf(cellOf('room_info', '방 정보'), heading);
+    const rooms = Math.max(1, parseInt(String(data.rooms || '1'), 10) || 1);
     fill('rooms', () => {
       const group = roomGroup('방 수')();
       return group ? group.querySelector('input') : null;
-    }, data.rooms, v => String(v).replace(' 이상', ''));
+    }, String(rooms));
     await sleep(REACT);
-    const layout = {'오픈형 원룸': '오픈형', '분리형 원룸': '분리형', '복층형 원룸': null}[data.roomLayout];
-    if (layout) await choose('roomLayout', roomGroup('방 거실 형태'), layout);
-    else if (data.roomLayout !== '복층형 원룸' && filled(data.roomLayout)) {
-      note('방 구조 ' + data.roomLayout + ': 다방의 오픈형/분리형에 정확히 대응하지 않습니다.');
+    if (rooms === 1) {
+      const living = data.structure === '분리형' ? '분리형' : data.structure === '오픈형' ? '오픈형'
+        : ({'오픈형 원룸': '오픈형', '분리형 원룸': '분리형'})[data.roomLayout] || null;
+      if (living) await choose('roomLayout', roomGroup('방 거실 형태'), living);
+      else miss('roomLayout', '방이 하나면 다방은 오픈형·분리형을 꼭 고르게 합니다. 통합 폼의 구조를 확인해 주세요.');
     }
-    if (data.petAllowed === '가능') await choose('petAllowed', roomGroup('방 특징(선택)'), '반려동물');
-    else if (filled(data.petAllowed)) {
-      note('반려동물 ' + data.petAllowed + ': 다방은 「허용」 체크만 제공해 불가능·확인 필요를 구분해 저장할 수 없습니다.');
+    const features = roomGroup('방 특징(선택)');
+    for (const [label, wanted] of [
+      ['신축', (data.roomFeatures || []).includes('신축')],
+      ['큰길가', (data.roomFeatures || []).includes('큰길가')],
+      ['반려동물', data.petAllowed === '가능'],
+    ]) {
+      const box = () => labelInput(features(), label);
+      if (!box()) continue;
+      if (box().checked !== wanted) await toggle('roomFeatures.' + label, box, wanted, label);
     }
 
     // ⑥ 거래 종류 — 고르면 가격 정보 행과 LH 행이 다시 그려진다. 다 그려진 뒤에 넣는다.
     const tradeCell = () => cellOf('trade_info', '거래 종류');
     await choose('trade', tradeCell, data.trade);
-    // 거래 종류를 고르면 가격 정보 행이 그 종류의 틀로 새로 그려진다. 다 그려진 뒤에 넣는다.
     const price = name => () => {
       const cell = cellOf('trade_info', '가격 정보');
       return cell ? cell.querySelector('input[name="' + name + '"]') : null;
@@ -1155,122 +1613,150 @@ String dabangInjectionScript(String payload) =>
       fill('deposit', price('deposit'), data.deposit);
       if (data.trade === '월세') fill('monthlyRent', price('price'), data.monthlyRent);
     }
-    if (data.shortTerm === true) {
-      await choose('shortTerm', tradeCell, '단기임대');
-      note('단기 매물 계약기간: 다방은 개월 수와 협의 여부를 함께 요구하지만 통합 폼에 기간 정보가 없어 화면에서 직접 골라 주셔야 합니다.');
+    // 단기임대 — 월세에서만 켜지고, 켜면 계약기간(개월)과 협의 가능 여부를 꼭 고르게 한다.
+    if (data.trade === '월세') {
+      const shortBox = () => labelInput(tradeCell(), '단기임대');
+      if (shortBox() && shortBox().checked !== (data.shortTerm === true)) {
+        await toggle('shortTerm', shortBox, data.shortTerm === true, '단기임대');
+      }
+      if (data.shortTerm === true) {
+        await waitUntil(() => document.querySelector('#trade_info select[name="shortLeaseMonth"]'), 2500);
+        await selectValue('shortTermMonths', () => document.querySelector('#trade_info select[name="shortLeaseMonth"]'), String(parseInt(data.shortTermMonths, 10)));
+        await selectValue('shortTermNegotiation', () => document.querySelector('#trade_info select[name="shortLeaseMonthNegotiationType"]'),
+          data.shortTermNegotiation === '이상 협의가능' ? 'OVER' : 'UNDER');
+      }
     }
 
-    // ⑦ 융자금 — 다방은 시세 대비 비율만 받는다.
-    if (data.loan === '없음') await select('loan', pick('trade_info', '융자금 여부', 'select'), '없음');
-    else if (filled(data.loan)) {
-      note('융자금 ' + data.loan + (filled(data.loanAmount) ? ' (' + data.loanAmount + '만원)' : '') +
-        ': 다방은 시세 대비 30% 이상/미만 구간만 받아 통합 폼의 금액만으로는 구간을 정할 수 없습니다.');
+    // ⑦ 융자금
+    const loanSelect = pick('trade_info', '융자금 여부', 'select');
+    const loanCode = {'없음': 'NOT_EXIST', '시세 30% 미만': 'THIRTY_UNDER', '시세 30% 이상': 'THIRTY_OVER'}[data.loan];
+    if (await selectValue('loan', loanSelect, loanCode) && loanCode !== 'NOT_EXIST' && filled(data.loanAmount)) {
+      const amount = pick('trade_info', '융자금 여부', 'input[type="text"]');
+      if (await ready(amount, 1500)) fill('loanAmount', amount, digits(data.loanAmount));
     }
 
-    // ⑧ LH — 전세·월세에서만 나온다.
-    if (filled(data.lh)) {
-      if (cellOf('trade_info', 'LH')) await choose('lh', () => cellOf('trade_info', 'LH'), data.lh);
-      else note('LH 전세임대 여부: 이 거래 종류에서는 다방 폼에 LH 항목이 나타나지 않습니다.');
+    // ⑧ LH — 전세·월세에서만 나온다. 「가능」이면 임대인 동의 체크(필수)가 붙는데, 그것은 동의라 사람이 한다.
+    if (filled(data.lh) && data.trade !== '매매') {
+      const lhCell = () => cellOf('trade_info', 'LH');
+      if (await waitUntil(lhCell, 2000)) {
+        await choose('lh', lhCell, data.lh);
+        if (data.lh === '가능') note('LH 전세임대 가능: 다방은 「임대인의 동의를 받은 매물」 확인 체크(필수)를 요구합니다. 동의 항목이라 직접 확인하고 체크해 주세요.');
+      } else note('LH 전세임대 여부: 이 거래 종류에서는 다방 폼에 LH 항목이 나타나지 않습니다.');
     }
 
     // ⑨ 관리비
-    await select('noManagementFee', pick('trade_info', '관리비', 'select'), data.noManagementFee === true ? '없음' : '있음');
+    const feeSelect = pick('trade_info', '관리비', 'select');
+    await selectValue('noManagementFee', feeSelect, data.noManagementFee === true ? 'false' : 'true');
     if (data.noManagementFee !== true) await completeFeeModal();
-    if (filled(data.unknownFeeReason) && data.manageMethod === '확인 불가') {
-      note('확인 불가 법정 사유: 다방 상세입력 창의 「확인불가」에는 사유를 고르는 칸이 없습니다.');
-    }
-    if (filled(data.manageDetail) && data.manageMethod === '정액 관리비') {
-      note('비목별 실비·정액 내역: 다방은 포함 항목 체크만 받고 비목별 부과 방식은 저장하지 않습니다.');
-    }
 
     // ⑩ 입주
     const moveIn = () => cellOf('trade_info', '입주 가능 일자');
-    if (data.moveInType === '즉시 입주') await choose('moveInType', moveIn, '즉시 입주');
-    else if (data.moveInType === '날짜 지정') {
+    if (data.moveInType === '날짜 지정' && filled(data.moveInDate)) {
       await choose('moveInType', moveIn, '일자 선택');
-      fill('moveInDate', pick('trade_info', '입주 가능 일자', 'input[type="text"]'), data.moveInDate, v => String(v).replace(/-/g, ''));
-    } else if (data.moveInType === '협의 가능') {
+      await sleep(REACT);
+      fill('moveInDate', pick('trade_info', '입주 가능 일자', 'input[type="text"]'), data.moveInDate, v => String(v).replace(/-/g, ''), sameDigits);
+    } else {
       await choose('moveInType', moveIn, '즉시 입주');
-      await choose('moveInNegotiable', moveIn, '협의 가능할 경우');
-      note('입주 방식 협의 가능: 다방은 즉시 입주/일자 선택 중 하나를 고른 뒤 「협의 가능할 경우」를 덧붙이는 구조라 즉시 입주 + 협의 가능으로 넣었습니다.');
     }
-    if (data.moveInNegotiable === true) await choose('moveInNegotiable', moveIn, '협의 가능할 경우');
+    const negotiable = () => labelInput(moveIn(), '협의 가능할 경우');
+    if (negotiable() && negotiable().checked !== (data.moveInNegotiable === true)) {
+      await toggle('moveInNegotiable', negotiable, data.moveInNegotiable === true, '협의 가능할 경우');
+    }
 
-    // ⑪ 층 수 — 전체 층을 고르면 해당 층 목록이 다시 만들어진다.
-    await select('floorAll', pick('additional_info', '층 수', 'select', 0), String(data.floorAll) + '층');
-    await select('floor', pick('additional_info', '층 수', 'select', 1), data.floor === '옥탑' ? '옥탑' : String(data.floor));
-    if (data.floorPrivate === true) {
-      const hide = pick('additional_info', '층 수', 'input[type="checkbox"]');
-      if (hide() && !hide().disabled) {
-        await toggle('floorPrivate', hide, true, '저/중/고 표기');
-        note('층수 비공개: 다방은 해당 층을 고른 뒤 저/중/고 표기만 대신 노출합니다. 표기 구간은 화면에서 직접 골라 주세요.');
-      } else note('층수 비공개: 다방은 해당 층을 반드시 고르게 되어 있어 완전한 비공개로 둘 수 없습니다.');
+    // ⑪ 층 수 — 전체 층을 고르면 해당 층 목록이 다시 만들어진다. 반지층 -1 · 옥탑 0.
+    await selectValue('floorAll', pick('additional_info', '층 수', 'select', 0), String(parseInt(data.floorAll, 10)));
+    const floorCode = data.floor === '반지하' ? '-1' : data.floor === '옥탑' ? '0' : String(parseInt(data.floor, 10));
+    await waitUntil(() => { const s = pick('additional_info', '층 수', 'select', 1)(); return s && [...s.options].some(o => o.value === floorCode); }, 2500);
+    await selectValue('floor', pick('additional_info', '층 수', 'select', 1), floorCode);
+    const bandBox = pick('additional_info', '층 수', 'input[type="checkbox"]');
+    if (bandBox()) {
+      if (bandBox().checked !== (data.floorPrivate === true)) {
+        await toggle('floorPrivate', bandBox, data.floorPrivate === true, '저/중/고 표기');
+      }
+      if (data.floorPrivate === true) {
+        const band = {'저층': 'LOW', '중층': 'MIDDLE', '고층': 'HIGH'}[data.floorBand];
+        await waitUntil(() => { const s = pick('additional_info', '층 수', 'select', 2)(); return s && !s.disabled; }, 2000);
+        await selectValue('floorBand', pick('additional_info', '층 수', 'select', 2), band);
+      }
     }
 
     // ⑫ 방향
-    const base = {'거실 기준': '거실', '안방 기준': '안방', '주실 기준': '거실'}[data.directionBase];
-    if (data.directionBase === '주실 기준') {
-      note('방향 기준 주실 기준: 다방은 안방/거실만 제공해 「거실」로 넣었습니다(공인중개사법의 주실 = 거실이나 안방).');
-    }
-    if (base) {
-      await select('directionBase', pick('additional_info', '방향 기준', 'select', 0), base);
-      await select('direction', pick('additional_info', '방향 기준', 'select', 1), data.direction);
-    }
+    const base = {'거실 기준': 'LIVING_ROOM', '안방 기준': 'MAIN_ROOM'}[data.directionBase];
+    await selectValue('directionBase', pick('additional_info', '방향 기준', 'select', 0), base);
+    await select('direction', pick('additional_info', '방향 기준', 'select', 1), data.direction);
 
     // ⑬ 욕실·엘리베이터 — 같은 줄의 다른 칸이다.
-    fill('bathrooms', pick('additional_info', '욕실 수', 'input'), data.bathrooms, v => String(v).replace(' 이상', ''));
+    fill('bathrooms', pick('additional_info', '욕실 수', 'input'), String(parseInt(data.bathrooms, 10)));
     await choose('elevator', () => cellOf('additional_info', '엘리베이터'), data.elevator);
 
-    // ⑭ 주차
-    const parkingOk = await select('parking', pick('additional_info', '주차 가능 여부', 'select'), data.parking === '주차 가능' ? '가능' : '불가능');
+    // ⑭ 주차 — 오피스텔·아파트는 세대당 주차 수도 필수다.
+    const parkingOk = await selectValue('parking', pick('additional_info', '주차 가능 여부', 'select'), data.parking === '주차 가능' ? 'true' : 'false');
     if (parkingOk && data.parking === '주차 가능') {
-      const count = pick('additional_info', '주차 가능 여부', 'input[type="text"]');
+      const count = () => { const cell = cellOf('additional_info', '주차 가능 여부'); return cell ? cell.querySelector('input[placeholder*="총 가능 주차수"]') || cell.querySelector('input[type="text"]') : null; };
       if (await ready(count)) fill('parkingCount', count, data.parkingCount);
       else miss('parkingCount', '주차 대수 입력란이 켜지지 않았습니다.');
+      const average = () => { const cell = cellOf('additional_info', '주차 가능 여부'); return cell ? cell.querySelector('input[placeholder*="세대당"]') : null; };
+      if (average()) {
+        if (filled(data.parkingPerHousehold)) fill('parkingPerHousehold', average, data.parkingPerHousehold);
+        else miss('parkingPerHousehold', '다방은 오피스텔·아파트의 세대당 주차 수를 필수로 받습니다.');
+      } else if (filled(data.parkingPerHousehold)) note('세대당 주차 대수: 다방은 주택/빌라에서 총 주차 대수만 받습니다.');
     }
-    if (filled(data.parkingPerHousehold)) note('세대당 주차 대수: 다방은 총 주차 대수만 받습니다.');
 
-    // ⑮ 복층
-    if (filled(data.roomLayout)) {
-      await choose('roomLayout.duplex', () => cellOf('additional_info', '복층 여부'), data.roomLayout === '복층형 원룸' ? '복층' : '단층');
+    // ⑮ 복층 · 현관 · 세대
+    await choose('roomLayout.duplex', () => cellOf('additional_info', '복층 여부'), data.duplex === '복층' || data.roomLayout === '복층형 원룸' ? '복층' : '단층');
+    if (filled(data.entranceType)) await select('entranceType', pick('additional_info', '현관 유형', 'select'), data.entranceType);
+    if (filled(data.householdCount)) {
+      const household = pick('additional_info', '세대(가구수)', 'input');
+      if (household()) fill('householdCount', household, digits(data.householdCount));
     }
 
-    // ⑯ 시설
-    await choose('heating', () => cellOf('facility_info', '난방 시설'), data.heating);
-    const living = () => cellOf('facility_info', '생활 시설');
-    for (const item of (data.appliances || [])) {
-      if (item === '에어컨') {
-        note('에어컨: 다방은 벽걸이형·스탠드형·천장형 중 하나를 고르게 되어 있는데 통합 폼에는 종류 정보가 없어 임의로 고르지 않았습니다.');
-        continue;
+    // ⑯ 시설 — 켤 것은 켜고, 끌 것은 끈다.
+    if (filled(data.heating)) await choose('heating', () => cellOf('facility_info', '난방 시설'), data.heating);
+    const setChecks = async (section, wantedLabels, known) => {
+      const cell = () => cellOf('facility_info', section);
+      if (!cell()) return;
+      for (const label of known) {
+        const box = () => labelInput(cell(), label);
+        if (!box()) continue;
+        const wanted = wantedLabels.includes(label);
+        if (box().checked !== wanted) await toggle('facility.' + label, box, wanted, label);
+        else if (wanted) ok();
       }
-      if (labelInput(living(), item)) await choose('appliances.' + item, living, item);
-      else note('가전·가구 옵션 ' + item + ': 다방 생활 시설에 대응 항목이 없습니다.');
-    }
-    const FACILITY = {
-      'CCTV': ['보안 시설', 'CCTV'], '인터폰': ['보안 시설', '인터폰'], '비디오폰': ['보안 시설', '비디오폰'],
-      '공동현관보안': ['보안 시설', '현관보안'], '사설경비': ['보안 시설', '사설경비'],
-      '무인택배함': ['기타 시설', '무인택배함'], '테라스': ['기타 시설', '테라스'], '베란다/발코니': ['기타 시설', '베란다'],
     };
-    for (const item of (data.facilities || [])) {
-      const target = FACILITY[item];
-      if (!target) { note('보안 및 시설 옵션 ' + item + ': 다방 시설 정보에 대응 항목이 없습니다.'); continue; }
-      await choose('facilities.' + item, () => cellOf('facility_info', target[0]), target[1]);
-    }
+    await setChecks('냉방 시설', (data.appliances || []).includes('에어컨') ? (data.airconType || []) : [], ['벽걸이형', '스탠드형', '천장형']);
+    const LIVING = ['침대', '책상', '옷장', '식탁', '쇼파', '신발장', '냉장고', '세탁기', '건조기', '샤워부스', '욕조', '비데', '싱크대', '식기세척기', '가스레인지', '인덕션', '전자레인지', '가스오븐', 'TV', '붙박이장'];
+    await setChecks('생활 시설', data.appliances || [], LIVING);
+    const skipped = (data.appliances || []).filter(item => item !== '에어컨' && !LIVING.includes(item));
+    if (skipped.length) note('가전·가구 ' + skipped.join(', ') + ': 다방 생활 시설에 없어 직방에만 들어갑니다.');
+    const facilities = (data.facilities || []).map(item => ({'공동현관보안': '현관보안', '베란다/발코니': '베란다'})[item] || item);
+    await setChecks('보안 시설', facilities, ['경비원', '비디오폰', '인터폰', '카드키', 'CCTV', '사설경비', '현관보안', '방범창']);
+    await setChecks('기타 시설', facilities, ['화재경보기', '베란다', '테라스', '마당', '무인택배함']);
+    if ((data.facilities || []).includes('전기차 충전시설')) note('전기차 충전시설: 다방 시설 정보에 없어 직방에만 들어갑니다.');
 
-    // ⑰ 글
+    // ⑰ 글 — 제목 칸은 다방이 허락하지 않은 글자가 섞이면 값을 통째로 받지 않는다.
     fill('title', pick('detail_info', '제목', 'input,textarea'), data.title);
     fill('description', pick('detail_info', '상세설명', 'textarea,input'), data.description);
-    fill('privateMemo', pick('detail_info', '비공개 메모', 'textarea,input'), data.privateMemo);
+    if (filled(data.privateMemo)) fill('privateMemo', pick('detail_info', '비공개 메모', 'textarea,input'), data.privateMemo);
 
-    if (filled(data.violation) && data.violation !== '해당 없음') {
-      note('위반건축물 여부: 다방 등록 폼에 별도 입력란이 없어 상세 설명에 「위반건축물」로 표시해야 합니다.');
+    // ⑱ 연락처 — 비워 두면 대표 연락처로 들어간다. 첫 연락처를 그대로 고른다.
+    const contact = () => { const cell = cellOf('agent_contact_info', '연락처'); return cell ? cell.querySelector('select') : null; };
+    if (contact() && !contact().value) {
+      const first = [...contact().options].find(o => o.value !== '');
+      if (first) await selectValue('agentContact', contact, first.value);
     }
-    if (filled(data.loanAvailable)) note('대출 가능 여부: 다방 등록 폼에 대응 입력란이 없습니다.');
-    if (filled(data.ownerPhone)) note('집주인 연락처: 다방 등록 폼에 집주인 연락처 입력란이 없습니다.');
-    if (data.singleBuilding === true) note('단일동 여부: 다방은 「등기부등본 상에 동 정보가 없을 경우」 체크만 제공하며 주소를 고른 뒤에 켜집니다.');
+
+    if (filled(data.loanAvailable)) note('전세자금대출 가능 여부: 다방 등록 폼에 대응 입력란이 없어 직방에만 들어갑니다.');
+    if (filled(data.eContract)) note('전자계약 가능 여부: 다방 등록 폼에 대응 입력란이 없어 직방에만 들어갑니다.');
+    if (filled(data.ownerPhone)) note('집주인 연락처: 다방 등록 폼에 집주인 연락처 입력란이 없어 직방에만 들어갑니다.');
+    // 실물 확인 2026-09-21: 다방 폼의 일곱 섹션 어디에도 위반건축물·중개 의뢰 방법 줄이 없다.
+    if (filled(data.violation) && data.violation !== '해당 없음') {
+      note('위반건축물 여부: 다방 등록 폼에 대응 입력란이 없어 직방에만 들어갑니다. '
+        + '다방 광고에도 알려야 한다면 상세 설명에 적어 주세요.');
+    }
+    if (filled(data.mediationMethod)) note('중개 의뢰를 받은 방법: 다방 등록 폼에 대응 입력란이 없어 직방에만 들어갑니다.');
     for (const message of (window.__flrPostcode ? window.__flrPostcode.notes : [])) note(message);
 
-    // ⑱ 마지막 대조 — 주소(②)나 그 밖의 무엇이 폼을 되돌렸다면 여기서 드러나고,
+    // ⑲ 마지막 대조 — 주소(②)나 그 밖의 무엇이 폼을 되돌렸다면 여기서 드러나고,
     // 여기서 다시 채워진다. 「검증」 숫자도 여기서 본 것으로 고쳐 적는다.
     await reconcile();
     settled = true;
@@ -1289,6 +1775,7 @@ String dabangInjectionScript(String payload) =>
   }
   // 「임시저장」·「등록 완료」·#submit 은 어떤 경우에도 누르지 않는다. 이 어댑터는 채우기만 한다.
   publish();
+  setTimeout(() => auto(false), 1500);
 })();
 ''';
 

@@ -238,10 +238,8 @@ enum PhotoTarget {
   /// as `[host, path]` pairs.
   List<List<String>> get formPages => [
     for (final site in PlatformSite.values)
-      [
-        platform.urlsOn(site).host,
-        pageDirectory(Uri.parse(platform.urlsOn(site).form)),
-      ],
+      for (final form in platform.urlsOn(site).forms)
+        [platform.urlsOn(site).host, pageDirectory(Uri.parse(form))],
   ];
 
   /// MIME types this mirror's upload handler keeps. Other photos are skipped

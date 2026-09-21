@@ -55,6 +55,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
       _index = index;
       _stage = _Stage.login;
       _login = MirrorLogin(platform: _queue[index])..addListener(_onLogin);
+      attachPlatformDialogs(_login!, () => context);
     });
   }
 

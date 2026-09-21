@@ -70,6 +70,10 @@ class PlatformUrls {
     required this.dashboard,
     required this.login,
     required this.listings,
+    this.villaForm,
+    this.officetelForm,
+    this.villaListings,
+    this.officetelListings,
     this.signedOutPaths = const [],
     this.signedOutExactPaths = const [],
     this.signedOutHosts = const [],
@@ -79,10 +83,23 @@ class PlatformUrls {
   /// 이 호스트에서 이 플랫폼 몫인 경로의 머리. 실물은 호스트 전체(`/`), 미러는 한
   /// 호스트를 셋이 나눠 쓰므로 `/zigbang/` 처럼 갈린다.
   final String root;
+
+  /// 기본 매물 등록 폼. 직방은 원룸 폼이다.
   final String form;
   final String dashboard;
   final String login;
   final String listings;
+
+  /// 직방은 매물마다 폼이 다르다 — 방 2개 이상 빌라는 빌라 폼, 오피스텔은 오피스텔
+  /// 폼이다(실물 라우트 2026-09-21). 없으면 [form] 하나로 받는다(미러·다방).
+  final String? villaForm;
+  final String? officetelForm;
+  final String? villaListings;
+  final String? officetelListings;
+
+  /// 이 플랫폼이 쓰는 등록 폼 전부 — 사진 다리와 모바일 레이아웃이 「여기가 등록 폼인가」를
+  /// 가릴 때 본다.
+  List<String> get forms => [form, ?villaForm, ?officetelForm];
 
   /// 로그인 안 된 요청이 튕겨 가는 경로 (같은 호스트 안, 앞부분 일치).
   final List<String> signedOutPaths;
@@ -147,12 +164,20 @@ extension ListingPlatformConfig on ListingPlatform {
     // 직방 CEO. 로그인 안 된 요청은 전부 307 로 `/intro` 에 간다. 로그인은
     // `/account/login/email` 이 account.zigbang.com OAuth 로 **도메인을 건너가서**
     // 받고, 끝나면 `/OAuth/Callback` 이 `ceo_zauth` 를 심고 돌아온다.
+    //
+    // 등록 폼은 셋이다 — 원룸(방 1개), 빌라(방 2개 이상), 오피스텔. 폼마다 받는
+    // 구조·거래 유형이 달라서 매물에 맞는 폼을 연다([formUrlFor], 실물 번들 실측
+    // 2026-09-21). 아파트는 이 셋 어디로도 받지 않는다.
     (ListingPlatform.zigbang, PlatformSite.live) => const PlatformUrls(
       root: '/',
       form: 'https://ceo.zigbang.com/ads/oneroom/ad-item/new',
+      villaForm: 'https://ceo.zigbang.com/ads/villa/ad-item/new',
+      officetelForm: 'https://ceo.zigbang.com/ads/officetel/ad-item/new',
       dashboard: 'https://ceo.zigbang.com/dashboard',
       login: 'https://ceo.zigbang.com/account/login/email',
       listings: 'https://ceo.zigbang.com/ads/oneroom?status=open',
+      villaListings: 'https://ceo.zigbang.com/ads/villa?status=open',
+      officetelListings: 'https://ceo.zigbang.com/ads/officetel?status=open',
       signedOutPaths: ['/intro', '/account/login', '/error/401'],
       signedOutHosts: ['account.zigbang.com'],
     ),
@@ -212,6 +237,26 @@ extension ListingPlatformConfig on ListingPlatform {
 
   /// The listing form 한방 fills.
   String get formUrl => urls.form;
+
+  /// 이 매물을 받는 등록 폼. 직방만 매물에 따라 갈린다([zigbangFormFor]).
+  String formUrlFor(Map<String, dynamic> values) => switch (this) {
+    ListingPlatform.zigbang => switch (zigbangFormFor(values)) {
+      ZigbangForm.villa => urls.villaForm ?? urls.form,
+      ZigbangForm.officetel => urls.officetelForm ?? urls.form,
+      _ => urls.form,
+    },
+    _ => urls.form,
+  };
+
+  /// 이 매물이 걸리는 광고 목록. 직방은 폼마다 목록도 따로다.
+  String listingsUrlFor(Map<String, dynamic> values) => switch (this) {
+    ListingPlatform.zigbang => switch (zigbangFormFor(values)) {
+      ZigbangForm.villa => urls.villaListings ?? urls.listings,
+      ZigbangForm.officetel => urls.officetelListings ?? urls.listings,
+      _ => urls.listings,
+    },
+    _ => urls.listings,
+  };
 
   /// The page a signed-in agent lands on (직방 CEO 대시보드, 다방프로 대시보드,
   /// 당근부동산 중개소 홈). 로그인이 안 돼 있으면 **플랫폼이** 이 주소를 로그인 화면으로
@@ -381,73 +426,132 @@ class FieldGroup {
   final List<MasterField> fields;
 }
 
-const _types = [
-  '오픈형 원룸',
-  '분리형 원룸',
-  '복층형 원룸',
-  '투룸 빌라',
-  '쓰리룸 이상 빌라',
-  '오피스텔 원룸형',
-  '오피스텔 분리/투룸형',
-  '아파트',
-  '단독주택',
-  '다가구주택',
-  '상가주택',
-  '상가 점포',
-  '사무실',
-  '일반 건물',
-  '공장/창고',
-  '토지',
-];
+/// 매물 종류 — **건물의 형태**다. 방이 몇 개인지, 원룸이면 오픈형인지 분리형인지는
+/// 따로 받는다([roomCount], [HifiField.structure]).
+///
+/// 다방은 이것을 그대로 대분류(주택/빌라·오피스텔·아파트)와 소분류(빌라/연립/다세대·
+/// 단독주택·다가구주택·상가주택)로 받고, 직방은 여기에 방 수를 더해 원룸·빌라·오피스텔
+/// 폼 가운데 하나를 연다([zigbangFormFor]). 예전의 「오픈형 원룸」·「투룸 빌라」 같은 섞인
+/// 이름은 그 원룸이 다가구주택에 있는지 빌라에 있는지를 말하지 못해, 다방 소분류를
+/// 늘 「빌라/연립/다세대」로 잘못 골랐다.
+const propertyTypes = ['빌라/연립/다세대', '단독주택', '다가구주택', '상가주택', '오피스텔', '아파트'];
 
-/// The 29 statutory building-use categories in Building Act Enforcement
-/// Decree, Appendix 1.  These are deliberately not a shortened product list:
-/// the unified form must retain values required by the other two targets.
-const _uses = [
+/// 단지를 골라야 하는 매물. 다방은 주소 대신 시/도→시/군/구→동→단지와 평형을 받고,
+/// 호와 세대당 주차 수를 필수로 받는다(실물 실측 2026-09-21).
+const complexPropertyTypes = {'오피스텔', '아파트'};
+
+bool isComplexProperty(Map<String, dynamic> values) =>
+    complexPropertyTypes.contains(values['propertyType']);
+
+/// 방 개수. 「5 이상」은 5 로 센다. 아직 없으면 1.
+int roomCount(Map<String, dynamic> values) =>
+    int.tryParse(
+      '${values['rooms'] ?? ''}'.replaceAll(RegExp(r'[^0-9]'), ''),
+    ) ??
+    1;
+
+/// 직방이 매물을 받는 폼.
+///
+/// 폼마다 받는 구조가 다르다(실물 번들 2026-09-21): 원룸 폼은 오픈형·분리형·복층형
+/// 원룸만, 빌라 폼은 투룸·쓰리룸·포룸+ 만, 오피스텔 폼은 원룸부터 쓰리룸+ 까지.
+/// 거래 유형도 원룸 폼만 전세·월세이고 빌라·오피스텔 폼은 매매까지 받는다.
+enum ZigbangForm { oneroom, villa, officetel }
+
+/// 직방이 이 매물을 받는 폼. 받지 않으면 null — 아파트는 직방이 원룸·빌라·오피스텔
+/// 광고로 받지 않는다(주소가 아파트면 「광고배너상품 이용불가」로 막는다).
+ZigbangForm? zigbangFormFor(Map<String, dynamic> values) {
+  final type = values['propertyType'];
+  if (type == '오피스텔') return ZigbangForm.officetel;
+  if (type == '아파트' || !propertyTypes.contains(type)) return null;
+  return roomCount(values) >= 2 ? ZigbangForm.villa : ZigbangForm.oneroom;
+}
+
+/// 건축물대장의 용도 — **다방 목록의 글자 그대로**다(실물 실측 2026-09-21).
+///
+/// 다방은 이 목록에서 고르게 하고, 직방은 「단독주택」이 아니면 「그 외(직접 입력)」에
+/// 이 글자를 적게 한다. 그래서 다방 글자를 쓰면 두 곳 모두에 그대로 들어간다.
+const buildingUses = [
   '단독주택',
   '공동주택',
   '제1종근린생활시설',
   '제2종근린생활시설',
+  '업무시설',
+  '숙박시설',
   '문화 및 집회시설',
   '종교시설',
   '판매시설',
   '운수시설',
   '의료시설',
   '교육연구시설',
-  '노유자시설',
+  '노유자(노인 및 어린이 시설)',
   '수련시설',
   '운동시설',
-  '업무시설',
-  '숙박시설',
   '위락시설',
   '공장',
   '창고시설',
-  '위험물저장 및 처리시설',
-  '자동차관련시설',
-  '동물 및 식물관련시설',
-  '자원순환관련시설',
-  '교정 및 군사시설',
+  '위험물 저장 및 처리 시설',
+  '자동차 관련 시설',
+  '동물 및 식물 관련 시설',
+  '자원순환 관련 시설',
+  '교정 및 군사 시설',
   '방송통신시설',
   '발전시설',
-  '묘지관련시설',
-  '관광휴게시설',
+  '묘지 관련 시설',
+  '관광 휴게시설',
   '장례시설',
-  '야영장시설',
+  '야영장 시설',
+  '미등기건물',
+  '그 밖에 토지의 정착물',
 ];
+
+/// 다방은 오피스텔·아파트의 건축물용도를 이 셋으로만 받는다.
+const complexBuildingUses = ['공동주택', '업무시설', '숙박시설'];
+
+/// 관리비에 포함되는 비목 — 직방·다방이 **똑같이** 쓰는 여덟 가지다(직방 「관리비
+/// 포함 항목」, 다방 상세입력 창 「포함 항목」, 실물 실측 2026-09-21).
 const manageFeeItems = [
+  '일반(공용) 관리비',
+  '전기',
+  '수도',
+  '가스',
+  '난방',
   '인터넷',
-  '유선TV',
-  '청소비',
-  '수도료',
-  '가스사용료',
-  '전기료',
-  '난방비',
-  '승강기유지비',
-  '주차비',
-  '경비비',
-  '기타',
+  'TV',
+  '기타 관리비',
 ];
-const _appliances = [
+
+/// 정액 관리비가 10만원 이상일 때 직방·다방이 비목마다 부과 방식과 금액을 따로 받는
+/// 사용료. 공용 관리비와 기타 관리비는 줄이 따로 있다.
+const usageFeeItems = ['전기', '수도', '가스', '난방', '인터넷', 'TV'];
+const commonFeeItem = '일반(공용) 관리비';
+const etcFeeItem = '기타 관리비';
+
+/// 정액 관리비의 구간. 다방 상세입력 창의 세 가지와 같고, 직방은 「10만원 미만」을
+/// 「기타 · 관리비 월 10만원 미만」으로, 나머지 둘을 「정액 관리비」의 「고지 받았습니다 /
+/// 받지 않았습니다」로 받는다.
+const feeTiers = ['10만원 미만', '10만원 이상', '10만원 이상 (세부내역 미고지)'];
+
+/// 비목 하나의 부과 방식. 「해당 없음」은 직방에만 있고 다방에는 「실비」로 들어간다.
+const feeItemWays = ['정액', '실비', '해당 없음'];
+const commonFeeWays = ['정액', '실비'];
+
+const loanOptions = ['없음', '시세 30% 미만', '시세 30% 이상'];
+const directionBases = ['거실 기준', '안방 기준'];
+const shortTermNegotiations = ['이내 협의가능', '이상 협의가능'];
+const airconTypes = ['벽걸이형', '스탠드형', '천장형'];
+const roomFeatureOptions = ['신축', '큰길가'];
+
+/// 직방이 집주인 전화번호를 [확인] 했을 때 이미 다른 매물에 쓰인 번호면 고르게 하는
+/// 사유(필수, 실물 2026-09-21). 쓰일지는 [확인] 을 눌러 봐야 알아서 미리 받아 둔다.
+const ownerPhoneDuplicateReasons = ['의뢰인 다주택 보유', '법인 소유', '관리인·대리인 위임', '기타'];
+
+/// 직방 「중개 의뢰를 받은 방법」(필수).
+const mediationMethods = ['전화로 확인', '만나서 확인', '기타 방법으로 확인'];
+
+/// The hi-fi splits the master 가전·가구 row into two chip groups. Together
+/// they are **both** platforms' lists: 직방 「옵션」 and 다방 「생활 시설」 (+ 에어컨,
+/// whose type goes to 다방 「냉방 시설」).
+const homeApplianceOptions = [
   '에어컨',
   '세탁기',
   '건조기',
@@ -455,37 +559,57 @@ const _appliances = [
   '가스레인지',
   '인덕션',
   '전자레인지',
+  '가스오븐',
+  '식기세척기',
+  'TV',
+  '비데',
+];
+const furnitureOptions = [
   '침대',
   '책상',
+  '책장',
   '옷장',
+  '붙박이장',
   '신발장',
   '식탁',
   '쇼파',
   '싱크대',
+  '샤워부스',
+  '욕조',
 ];
-const _facilities = [
-  'CCTV',
-  '인터폰',
-  '비디오폰',
-  '공동현관보안',
-  '사설경비',
-  '무인택배함',
-  '테라스',
-  '베란다/발코니',
-  '전기차 충전시설',
-];
+const _appliances = [...homeApplianceOptions, ...furnitureOptions];
 
-/// The specification's 50 input rows, preserved individually in five sections.
+/// 보안·부대시설 — 다방 「보안 시설」·「기타 시설」과 직방 「매물 조건」을 합친 것.
+const securityOptions = [
+  '경비원',
+  '비디오폰',
+  '인터폰',
+  '카드키',
+  'CCTV',
+  '사설경비',
+  '공동현관보안',
+  '방범창',
+  '화재경보기',
+  '베란다/발코니',
+  '테라스',
+  '마당',
+  '무인택배함',
+];
+const evChargerFacility = '전기차 충전시설';
+const _facilities = [...securityOptions, evChargerFacility];
+
+/// The specification's 50 input rows, preserved individually in five sections,
+/// and the rows the live forms turned out to need on top of them (51~).
 final List<FieldGroup> groups = [
   FieldGroup('1. 매물 기본 정보', [
     MasterField(
       number: 1,
       key: 'propertyType',
-      label: '매물 대분류',
+      label: '매물 종류',
       type: InputType.choice,
       required: true,
-      example: '오픈형 원룸',
-      options: _types,
+      example: '단독주택',
+      options: propertyTypes,
     ),
     MasterField(
       number: 2,
@@ -493,9 +617,16 @@ final List<FieldGroup> groups = [
       label: '매물 기본 주소',
       type: InputType.addressSearch,
       required: true,
-      example: '서울특별시 강남구 테헤란로 123',
+      example: '경북 포항시 남구 대도동 168-7',
       unavailableReason:
           '여기서 저장한 주소는 직방·다방의 카카오 주소 검색 창에 검색어로 그대로 넘어갑니다. 좌표와 우편번호는 그 창에서 결과를 골라야 확정되므로, 전송 화면에서 한 번 눌러 주세요.',
+    ),
+    MasterField(
+      number: 51,
+      key: 'complexName',
+      label: '단지명',
+      type: InputType.text,
+      example: '포항자이',
     ),
     MasterField(
       number: 3,
@@ -503,14 +634,13 @@ final List<FieldGroup> groups = [
       label: '동 정보',
       type: InputType.text,
       example: '101',
-      required: false,
     ),
     MasterField(
       number: 4,
       key: 'singleBuilding',
       label: '단일동 여부',
       type: InputType.toggle,
-      example: 'false',
+      example: 'true',
     ),
     MasterField(
       number: 5,
@@ -518,7 +648,7 @@ final List<FieldGroup> groups = [
       label: '호수 정보',
       type: InputType.text,
       required: true,
-      example: '202',
+      example: '105',
     ),
     MasterField(
       number: 6,
@@ -526,7 +656,7 @@ final List<FieldGroup> groups = [
       label: '전용면적 (㎡)',
       type: InputType.number,
       required: true,
-      example: '33.05',
+      example: '26',
     ),
     MasterField(
       number: 7,
@@ -534,16 +664,15 @@ final List<FieldGroup> groups = [
       label: '공급면적 (㎡)',
       type: InputType.number,
       required: true,
-      example: '40.12',
+      example: '30',
     ),
     MasterField(
       number: 8,
       key: 'floorAll',
       label: '전체 층',
-      type: InputType.choice,
+      type: InputType.number,
       required: true,
-      example: '10',
-      options: List.generate(80, (i) => '${i + 1}'),
+      example: '4',
     ),
     MasterField(
       number: 9,
@@ -551,8 +680,8 @@ final List<FieldGroup> groups = [
       label: '해당 층',
       type: InputType.choice,
       required: true,
-      example: '5',
-      options: ['지하 1층', '반지하', ...List.generate(80, (i) => '${i + 1}'), '옥탑'],
+      example: '3',
+      options: ['반지하', ...List.generate(80, (i) => '${i + 1}'), '옥탑'],
     ),
     MasterField(
       number: 10,
@@ -567,8 +696,8 @@ final List<FieldGroup> groups = [
       label: '건축물 용도',
       type: InputType.choice,
       required: true,
-      example: '공동주택',
-      options: _uses,
+      example: '단독주택',
+      options: buildingUses,
     ),
     MasterField(
       number: 12,
@@ -576,7 +705,7 @@ final List<FieldGroup> groups = [
       label: '사용승인일',
       type: InputType.date,
       required: true,
-      example: '2018-03-01',
+      example: '2013-10-21',
     ),
   ]),
   FieldGroup('2. 가격 및 관리비 정보', [
@@ -587,7 +716,7 @@ final List<FieldGroup> groups = [
       type: InputType.choice,
       required: true,
       example: '월세',
-      options: ['월세', '전세', '매매', '단기'],
+      options: ['월세', '전세', '매매'],
     ),
     MasterField(
       number: 14,
@@ -595,7 +724,7 @@ final List<FieldGroup> groups = [
       label: '보증금 (만원)',
       type: InputType.number,
       required: true,
-      example: '1000',
+      example: '200',
     ),
     MasterField(
       number: 15,
@@ -603,7 +732,7 @@ final List<FieldGroup> groups = [
       label: '월세 금액 (만원)',
       type: InputType.number,
       required: true,
-      example: '65',
+      example: '20',
       visibleWhenKey: 'trade',
       visibleWhenValue: '월세',
     ),
@@ -615,8 +744,8 @@ final List<FieldGroup> groups = [
       example: '45000',
       visibleWhenKey: 'trade',
       visibleWhenValue: '매매',
-      targetAvailable: false,
-      unavailableReason: '원룸 직방 등록 폼은 매매 거래 유형과 매매가 입력을 제공하지 않습니다.',
+      unavailableReason:
+          '직방 원룸 폼은 매매를 받지 않습니다. 방 2개 이상 빌라·오피스텔만 직방에 매매로 올릴 수 있습니다.',
     ),
     MasterField(
       number: 17,
@@ -624,13 +753,37 @@ final List<FieldGroup> groups = [
       label: '단기 매물 여부',
       type: InputType.toggle,
       example: 'false',
+      visibleWhenKey: 'trade',
+      visibleWhenValue: '월세',
+    ),
+    MasterField(
+      number: 52,
+      key: 'shortTermMonths',
+      label: '단기 계약 기간 (개월)',
+      type: InputType.choice,
+      example: '6',
+      options: List.generate(11, (i) => '${i + 1}'),
+      visibleWhenKey: 'shortTerm',
+      visibleWhenValue: 'true',
+    ),
+    MasterField(
+      number: 53,
+      key: 'shortTermNegotiation',
+      label: '단기 계약 기간 협의',
+      type: InputType.choice,
+      example: '이내 협의가능',
+      options: shortTermNegotiations,
+      visibleWhenKey: 'shortTerm',
+      visibleWhenValue: 'true',
     ),
     MasterField(
       number: 18,
       key: 'loan',
-      label: '융자금 유무 및 금액',
+      label: '융자금',
       type: InputType.loan,
+      required: true,
       example: '없음',
+      options: loanOptions,
     ),
     MasterField(
       number: 19,
@@ -649,47 +802,59 @@ final List<FieldGroup> groups = [
       options: ['정액 관리비', '기타 부과', '확인 불가'],
     ),
     MasterField(
-      number: 21,
-      key: 'manageBasis',
-      label: '관리비 부과 기준',
+      number: 54,
+      key: 'feeTier',
+      label: '정액 관리비 구간',
       type: InputType.choice,
-      required: true,
-      example: '직전월 관리비 기준',
-      options: ['직전월 관리비 기준', '3개월 평균 관리비', '1년 평균 관리비', '기타 직접 입력'],
+      example: '10만원 미만',
+      options: feeTiers,
       visibleWhenKey: 'manageMethod',
       visibleWhenValue: '정액 관리비',
     ),
     MasterField(
+      number: 21,
+      key: 'manageBasis',
+      label: '관리비 부과 기준',
+      type: InputType.choice,
+      example: '직전월 관리비 기준',
+      options: ['직전월 관리비 기준', '3개월 평균 관리비', '1년 평균 관리비', '기타 직접 입력'],
+    ),
+    MasterField(
+      number: 55,
+      key: 'manageBasisNote',
+      label: '부과 기준 직접 입력',
+      type: InputType.text,
+      example: '최근 6개월 평균',
+      maxLength: 20,
+      visibleWhenKey: 'manageBasis',
+      visibleWhenValue: '기타 직접 입력',
+    ),
+    MasterField(
       number: 22,
       key: 'managementFee',
-      label: '총 관리비 금액 (만원)',
+      label: '관리비 총액 (만원)',
       type: InputType.number,
-      required: true,
-      example: '8',
-      visibleWhenKey: 'manageMethod',
-      visibleWhenValue: '정액 관리비',
+      example: '9',
     ),
     MasterField(
       number: 23,
       key: 'manageIncludes',
       label: '관리비 포함 항목',
       type: InputType.multiSelect,
-      example: '인터넷,수도료',
+      example: '수도,인터넷,TV',
       options: manageFeeItems,
-      visibleWhenKey: 'manageMethod',
-      visibleWhenValue: '정액 관리비',
     ),
     MasterField(
       number: 24,
       key: 'manageDetail',
-      label: '비목별 실비·정액 내역',
+      label: '항목별 관리비 (정액 10만원 이상)',
       type: InputType.manageDetails,
-      example: '인터넷:정액 부과, 수도료:실비 부과',
+      example: '일반(공용) 관리비:정액 50000, 전기:실비',
     ),
     MasterField(
       number: 25,
       key: 'otherFeeReason',
-      label: '기타 부과 법정 사유',
+      label: '기타 부과 근거',
       type: InputType.choice,
       example: '관리규약에 따라 부과',
       options: [
@@ -697,19 +862,28 @@ final List<FieldGroup> groups = [
         '면적 및 세대별 부과',
         '전체 세대 균등 부과',
         '계량기별 실비 부과',
-        '의뢰인 미고지',
         '기타',
       ],
       visibleWhenKey: 'manageMethod',
       visibleWhenValue: '기타 부과',
     ),
     MasterField(
+      number: 56,
+      key: 'otherFeeNote',
+      label: '기타 부과 근거 직접 입력',
+      type: InputType.text,
+      example: '세대별 균등 부과',
+      maxLength: 20,
+      visibleWhenKey: 'otherFeeReason',
+      visibleWhenValue: '기타',
+    ),
+    MasterField(
       number: 26,
       key: 'unknownFeeReason',
-      label: '확인 불가 법정 사유',
+      label: '확인 불가 사유',
       type: InputType.choice,
-      example: '미등기 건물 사유',
-      options: ['단독주택 사유', '상가 및 상가주택 사유', '미등기 건물 사유'],
+      example: '미등기·신축 건물 사유',
+      options: ['단독주택 사유', '상가 건물 사유', '미등기·신축 건물 사유'],
       visibleWhenKey: 'manageMethod',
       visibleWhenValue: '확인 불가',
     ),
@@ -720,7 +894,6 @@ final List<FieldGroup> groups = [
       key: 'roomLayout',
       label: '방 구조',
       type: InputType.choice,
-      required: true,
       example: '오픈형 원룸',
       options: ['오픈형 원룸', '분리형 원룸', '복층형 원룸'],
     ),
@@ -740,7 +913,7 @@ final List<FieldGroup> groups = [
       type: InputType.choice,
       required: true,
       example: '1',
-      options: ['1', '2', '3 이상'],
+      options: ['1', '2', '3', '4', '5'],
     ),
     MasterField(
       number: 30,
@@ -748,8 +921,8 @@ final List<FieldGroup> groups = [
       label: '방향 기준',
       type: InputType.choice,
       required: true,
-      example: '주실 기준',
-      options: ['거실 기준', '안방 기준', '주실 기준'],
+      example: '안방 기준',
+      options: directionBases,
     ),
     MasterField(
       number: 31,
@@ -757,7 +930,7 @@ final List<FieldGroup> groups = [
       label: '주실 방향',
       type: InputType.choice,
       required: true,
-      example: '남향',
+      example: '동향',
       options: ['동향', '서향', '남향', '북향', '북동향', '남동향', '북서향', '남서향'],
     ),
     MasterField(
@@ -774,7 +947,7 @@ final List<FieldGroup> groups = [
       key: 'parkingCount',
       label: '총 주차 대수',
       type: InputType.number,
-      example: '10',
+      example: '7',
       visibleWhenKey: 'parking',
       visibleWhenValue: '주차 가능',
     ),
@@ -784,8 +957,9 @@ final List<FieldGroup> groups = [
       label: '세대당 주차 대수',
       type: InputType.number,
       example: '0.7',
-      targetAvailable: false,
-      unavailableReason: '직방 원룸 폼은 총 주차대수만 지원하고 세대당 주차대수 필드가 없습니다.',
+      visibleWhenKey: 'parking',
+      visibleWhenValue: '주차 가능',
+      unavailableReason: '직방은 총 주차대수만 받습니다. 다방은 오피스텔·아파트에서 세대당 주차 수를 필수로 받습니다.',
     ),
     MasterField(
       number: 35,
@@ -793,7 +967,7 @@ final List<FieldGroup> groups = [
       label: '엘리베이터 유무',
       type: InputType.choice,
       required: true,
-      example: '있음',
+      example: '없음',
       options: ['있음', '없음'],
     ),
     MasterField(
@@ -811,7 +985,7 @@ final List<FieldGroup> groups = [
       label: '대출 가능 여부',
       type: InputType.choice,
       required: true,
-      example: '가능',
+      example: '불가능',
       options: ['가능', '불가능', '확인 필요'],
     ),
     MasterField(
@@ -820,7 +994,7 @@ final List<FieldGroup> groups = [
       label: '반려동물 가능 여부',
       type: InputType.choice,
       required: true,
-      example: '가능',
+      example: '불가능',
       options: ['가능', '불가능', '확인 필요'],
     ),
     MasterField(
@@ -828,10 +1002,10 @@ final List<FieldGroup> groups = [
       key: 'heating',
       label: '난방 방식',
       type: InputType.choice,
+      required: true,
       example: '개별난방',
       options: ['개별난방', '중앙난방', '지역난방'],
-      targetAvailable: false,
-      unavailableReason: '직방 원룸 폼에는 난방 방식 입력 항목이 없습니다.',
+      unavailableReason: '직방 폼에는 난방 방식 입력 항목이 없습니다.',
     ),
   ]),
   FieldGroup('4. 시설 및 옵션', [
@@ -840,16 +1014,32 @@ final List<FieldGroup> groups = [
       key: 'appliances',
       label: '가전·가구 옵션',
       type: InputType.multiSelect,
-      example: '에어컨,세탁기,냉장고',
+      example: '에어컨,냉장고,세탁기,가스레인지,신발장,싱크대',
       options: _appliances,
+    ),
+    MasterField(
+      number: 57,
+      key: 'airconType',
+      label: '에어컨 종류',
+      type: InputType.multiSelect,
+      example: '벽걸이형',
+      options: airconTypes,
     ),
     MasterField(
       number: 41,
       key: 'facilities',
       label: '보안 및 시설 옵션',
       type: InputType.multiSelect,
-      example: 'CCTV,테라스',
+      example: 'CCTV',
       options: _facilities,
+    ),
+    MasterField(
+      number: 60,
+      key: 'roomFeatures',
+      label: '방 특징',
+      type: InputType.multiSelect,
+      example: '큰길가',
+      options: roomFeatureOptions,
     ),
   ]),
   FieldGroup('5. 입주 및 매물 상세 설명', [
@@ -860,12 +1050,12 @@ final List<FieldGroup> groups = [
       type: InputType.choice,
       required: true,
       example: '즉시 입주',
-      options: ['즉시 입주', '날짜 지정', '협의 가능'],
+      options: ['즉시 입주', '날짜 지정'],
     ),
     MasterField(
       number: 43,
       key: 'moveInDate',
-      label: '입주 희망일',
+      label: '입주 가능일',
       type: InputType.date,
       example: '2026-10-01',
       visibleWhenKey: 'moveInType',
@@ -895,8 +1085,8 @@ final List<FieldGroup> groups = [
       label: '매물 제목 (한줄 요약)',
       type: InputType.text,
       required: true,
-      example: '채광 좋은 강남 원룸',
-      maxLength: 30,
+      example: '종합운동장 근교 밝은 원룸',
+      maxLength: titleMaxLength,
     ),
     MasterField(
       number: 47,
@@ -904,8 +1094,9 @@ final List<FieldGroup> groups = [
       label: '매물 상세 설명',
       type: InputType.text,
       required: true,
-      example: '역세권에 위치한 깨끗한 원룸입니다.',
-      maxLength: 1000,
+      example:
+          '종합운동장 근교의 밝고 깔끔한 오픈형 원룸입니다. 남구 대도동 주택가에 있어 조용하고, 주변에 마트와 버스 정류장이 가까워 생활이 편리합니다. 아직 세입자가 거주 중이라 약속 후 방을 보실 수 있습니다.',
+      maxLength: descriptionMaxLength,
     ),
     MasterField(
       number: 48,
@@ -914,15 +1105,15 @@ final List<FieldGroup> groups = [
       type: InputType.choice,
       example: '불가능',
       options: ['가능', '불가능'],
-      targetAvailable: false,
-      unavailableReason: '직방 원룸 폼은 LH 전세임대 여부를 입력받지 않습니다.',
+      unavailableReason: '직방 폼은 LH 전세임대 여부를 입력받지 않습니다.',
     ),
     MasterField(
       number: 49,
       key: 'privateMemo',
       label: '비공개 메모 (내부용)',
       type: InputType.text,
-      example: '임대인 연락은 오후에',
+      example: '대도 화이트하우스',
+      maxLength: privateMemoMaxLength,
     ),
     MasterField(
       number: 50,
@@ -931,12 +1122,62 @@ final List<FieldGroup> groups = [
       type: InputType.text,
       example: '010-1234-5678',
     ),
+    MasterField(
+      number: 61,
+      key: 'ownerPhoneDuplicateReason',
+      label: '집주인 번호 중복 시 사유',
+      type: InputType.choice,
+      example: '의뢰인 다주택 보유',
+      options: ownerPhoneDuplicateReasons,
+    ),
+    MasterField(
+      number: 62,
+      key: 'ownerPhoneDuplicateNote',
+      label: '중복 사유 직접 입력',
+      type: InputType.text,
+      example: '형제 공동 소유',
+      maxLength: 32,
+      visibleWhenKey: 'ownerPhoneDuplicateReason',
+      visibleWhenValue: '기타',
+    ),
+    MasterField(
+      number: 58,
+      key: 'mediationMethod',
+      label: '중개 의뢰 확인 방법',
+      type: InputType.choice,
+      required: true,
+      example: '전화로 확인',
+      options: mediationMethods,
+    ),
+    MasterField(
+      number: 59,
+      key: 'mediationNote',
+      label: '기타 확인 방법',
+      type: InputType.text,
+      example: '문자로 확인',
+      visibleWhenKey: 'mediationMethod',
+      visibleWhenValue: '기타 방법으로 확인',
+    ),
   ]),
 ];
 
+/// 두 플랫폼이 모두 받아 주는 글자 수 — 짧은 쪽 상한과 긴 쪽 하한이다(실물 실측
+/// 2026-09-21).
+///
+/// - 제목: 직방 한줄 요약 **7~32자**, 다방 제목 40자 → 7~32자
+/// - 상세 설명: 직방 **50~2000자**, 다방 **1000자** → 50~1000자
+/// - 비밀 메모: 직방 **200자**, 다방 제한 없음 → 200자
+/// - 입주 추가 설명: 직방 **10자**
+const titleMinLength = 7;
+const titleMaxLength = 32;
+const descriptionMinLength = 50;
+const descriptionMaxLength = 1000;
+const privateMemoMaxLength = 200;
+const moveInNoteMaxLength = 10;
+
 /// Rows the hi-fi form asks for on top of the 50 master rows. They travel with
-/// the listing and show on 102; no mirror adapter reads them yet, so each one
-/// simply reaches the platform page as an unknown key.
+/// the listing and show on 102. Adapters read the ones a platform has a place
+/// for (총 세대수·현관 구조·층군·전자계약·임대인 성함 …).
 abstract final class HifiField {
   static const householdCount = 'householdCount';
   static const moveInNote = 'moveInNote';
@@ -953,14 +1194,16 @@ abstract final class HifiField {
 
   /// What 자동 채우기 puts in each of them.
   static const examples = <String, Object>{
-    householdCount: '24',
-    moveInNote: '5월 말 퇴거 예정, 협의 가능',
-    eContract: '가능',
+    householdCount: '10',
+    moveInNote: '퇴거일 협의',
+    eContract: '불가능',
     floorBand: '중층',
+    structure: '오픈형',
+    duplex: '단층',
     entranceType: '계단식',
-    monthlyParkingFee: '2',
+    monthlyParkingFee: '0',
     evCharger: '없음',
-    tags: ['역세권', '채광 좋은 집'],
+    tags: ['주차가능', '조용한 동네'],
     ownerName: '홍길동',
     brokerageRoute: '일반 의뢰',
   };
@@ -975,44 +1218,16 @@ const availabilityOptions = ['있음', '없음'];
 const tagOptions = ['역세권', '주차가능', '풀옵션', '조용한 동네', '채광 좋은 집'];
 const brokerageRoutes = ['일반 의뢰', '전속 중개', '공동 중개', '기존 고객'];
 
-/// The hi-fi splits the master 가전·가구 row into two chip groups and widens
-/// the 보안 row. Values stay the master spellings the adapters map; only the
-/// label a chip prints may differ ([optionLabel]).
-const homeApplianceOptions = [
-  '에어컨',
-  '세탁기',
-  '건조기',
-  '냉장고',
-  '가스레인지',
-  '인덕션',
-  '전자레인지',
-];
-const furnitureOptions = ['옷장', '신발장', '싱크대', '침대', '책상', '식탁', '쇼파'];
-const securityOptions = [
-  '경비원',
-  '비디오폰',
-  '인터폰',
-  '카드키',
-  'CCTV',
-  '사설경비',
-  '공동현관보안',
-  '방범창',
-  '화재경보기',
-  '베란다/발코니',
-  '테라스',
-  '마당',
-  '무인택배함',
-];
-const evChargerFacility = '전기차 충전시설';
-
 String optionLabel(String value) => switch (value) {
   '공동현관보안' => '현관보안',
   '베란다/발코니' => '베란다',
   _ => value,
 };
 
-/// The master 방 구조 row, rebuilt from the hi-fi's 구조 and 복층 여부.
-String? roomLayoutFrom({String? structure, String? duplex}) {
+/// The master 방 구조 row, rebuilt from the hi-fi's 구조 and 복층 여부. Only a
+/// one-room listing has one — 투룸 이상은 방 수가 곧 구조다.
+String? roomLayoutFrom({String? structure, String? duplex, int rooms = 1}) {
+  if (rooms > 1) return null;
   if (duplex == '복층') return '복층형 원룸';
   if (structure == null) return null;
   return '$structure 원룸';

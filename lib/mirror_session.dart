@@ -10,6 +10,7 @@ import 'package:webview_flutter_android/webview_flutter_android.dart'
 
 import 'android_layout.dart';
 import 'fields.dart';
+import 'listing_rules.dart';
 import 'mobile_layout.dart';
 import 'photo_transfer.dart';
 import 'remote_form.dart';
@@ -43,7 +44,10 @@ class MirrorPage extends ChangeNotifier {
       ..addJavaScriptChannel(_pressChannel, onMessageReceived: _pressed)
       // iOS uses this otherwise-unused channel as an exact, per-WebView
       // rendezvous point for the native all-frame script bridge.
-      ..addJavaScriptChannel(_frameTargetChannel, onMessageReceived: (_) {});
+      ..addJavaScriptChannel(_frameTargetChannel, onMessageReceived: (_) {})
+      ..addJavaScriptChannel(_autoAnswerChannel, onMessageReceived: _autoAnswer)
+      ..setOnJavaScriptConfirmDialog(_confirm)
+      ..setOnJavaScriptAlertDialog(_alert);
     configure(controller);
     controller.setNavigationDelegate(
       NavigationDelegate(
@@ -88,6 +92,9 @@ class MirrorPage extends ChangeNotifier {
   static const _pressChannel = 'MirrorPress';
   static int _nextFrameTarget = 0;
 
+  /// 어댑터가 「지금부터 내가 누른다」·「다 눌렀다」를 알리는 채널([autoAnswerScript]).
+  static const _autoAnswerChannel = 'FlrAutoAnswer';
+
   final String _frameTargetChannel = 'FrameScriptTarget_${_nextFrameTarget++}';
 
   final ListingPlatform platform;
@@ -100,6 +107,54 @@ class MirrorPage extends ChangeNotifier {
 
   bool loaded = false;
   String? failure;
+
+  /// 플랫폼 페이지의 `confirm()` 을 사람에게 묻는 곳. 화면이 붙여 준다.
+  ///
+  /// **붙이지 않으면 WebView 는 확인 창마다 「취소」로 답한다**(webview_flutter 의
+  /// 기본값, iOS·Android 모두). 다방은 매물 유형을 바꿀 때와 관리비 부과 방식 탭을
+  /// 바꿀 때 `confirm()` 으로 되묻고 「취소」면 아무것도 바꾸지 않는다 — 그래서 예전에는
+  /// 오피스텔·아파트로도, 관리비 「기타부과」·「확인불가」로도 끝내 넘어가지 못했다
+  /// (실물 번들 실측 2026-09-21).
+  Future<bool> Function(String message)? onConfirm;
+
+  /// 플랫폼 페이지의 `alert()` 을 사람에게 보여 주는 곳. 없으면 조용히 넘긴다.
+  Future<void> Function(String message)? onAlert;
+
+  /// 어댑터가 페이지를 다루는 중인가. 그동안의 확인 창은 어댑터가 부른 것이라 「확인」으로
+  /// 답하고, 알림은 사람을 붙잡지 않고 [pageAlerts] 에 적어 둔다.
+  bool autoAnswering = false;
+
+  /// 어댑터가 도는 동안 페이지가 띄운 알림 — 사람이 봐야 할 말일 수 있어 남겨 둔다.
+  final pageAlerts = <String>[];
+
+  void _autoAnswer(JavaScriptMessage message) {
+    autoAnswering = message.message == 'on';
+  }
+
+  /// 사진 다리가 페이지를 다루는 중인가 — 그동안도 사람을 붙잡지 않는다.
+  @protected
+  bool photosRunning = false;
+
+  Future<bool> _confirm(JavaScriptConfirmDialogRequest request) async {
+    if (_disposed) return false;
+    if (autoAnswering || photosRunning) return true;
+    final ask = onConfirm;
+    // 사람이 누른 것의 확인 창은 **사람이 답한다.** 물을 화면이 없으면 예전처럼
+    // 「취소」다 — 광고 종료처럼 되돌릴 수 없는 확인을 한방이 대신 누르지 않는다.
+    return ask == null ? false : await ask(request.message);
+  }
+
+  Future<void> _alert(JavaScriptAlertDialogRequest request) async {
+    if (_disposed) return;
+    if (autoAnswering || photosRunning) {
+      final message = request.message.trim();
+      if (message.isNotEmpty && !pageAlerts.contains(message)) {
+        pageAlerts.add(message);
+      }
+      return;
+    }
+    await onAlert?.call(request.message);
+  }
 
   /// The label of the platform button the agent pressed, once they have.
   String? pressedLabel;
@@ -262,7 +317,7 @@ class MirrorSession extends MirrorPage {
     this.onPhotoTransferComplete,
     super.loadTimeout = const Duration(minutes: 3),
   }) : super(
-         url: Uri.parse(platform.formUrl),
+         url: Uri.parse(platform.formUrlFor(values)),
          watchLabels: platform.submitLabels,
        ) {
     status = '${platform.label} 페이지를 여는 중…';
@@ -320,7 +375,12 @@ class MirrorSession extends MirrorPage {
   ];
 
   /// Everything worth showing, blockers first.
-  List<String> get reasons => [...blockers, ...unsupported, ...photoNotes];
+  List<String> get reasons => [
+    ...blockers,
+    ...unsupported,
+    ...photoNotes,
+    for (final alert in pageAlerts) '${platform.label} 알림: $alert',
+  ];
 
   @override
   void configure(WebViewController controller) {
@@ -397,7 +457,14 @@ class MirrorSession extends MirrorPage {
           postcodeBridgeScript(jsonEncode(values['address'] ?? '')),
         );
       }
-      final payload = jsonEncode(values);
+      final payload = jsonEncode(
+        platform == ListingPlatform.daangn
+            ? legacyDaangnValues(values)
+            : values,
+      );
+      // 어댑터가 누르는 것에 페이지가 되묻는 확인 창은 「확인」으로 답한다. 어댑터가
+      // 끝나면 스스로 끈다([autoAnswerScript]).
+      autoAnswering = true;
       await controller.runJavaScript(switch (platform) {
         ListingPlatform.zigbang => zigbangInjectionScript(payload),
         ListingPlatform.dabang => dabangInjectionScript(payload),
@@ -461,6 +528,7 @@ class MirrorSession extends MirrorPage {
       return;
     }
     _photosDone = false;
+    photosRunning = true;
     try {
       final skipped = await transferListingPhotos(
         target: target,
@@ -482,6 +550,7 @@ class MirrorSession extends MirrorPage {
       photoStatus = '사진 첨부가 중단되었습니다.';
       photoFailure = '사진 첨부: $error';
     }
+    photosRunning = false;
     _photosDone = true;
     await _releaseAdapter();
     if (filled) filling = false;
@@ -541,7 +610,7 @@ class MirrorListings extends MirrorPage {
     super.loadTimeout = const Duration(minutes: 2),
   }) : _number = number,
        super(
-         url: Uri.parse(platform.listingsUrl),
+         url: Uri.parse(platform.listingsUrlFor(values)),
          // 표를 붙이지 않는 자리(등록 직후의 조용한 확인)는 누름을 듣지 않는다.
          watchLabels: mark ? platform.takedownLabels : const [],
        );
@@ -587,8 +656,7 @@ class MirrorListings extends MirrorPage {
   /// 끝내 못 찾았을 때만 울타리를 푼다 — 그때는 사람이 제 손으로 찾아 눌러야 하고,
   /// 울타리가 남아 있으면 그 누름을 한방이 못 듣는다.
   @override
-  String? get pressScope =>
-      cardFound || !gaveUp ? takedownCardSelector : null;
+  String? get pressScope => cardFound || !gaveUp ? takedownCardSelector : null;
 
   @override
   void configure(WebViewController controller) {
@@ -837,6 +905,53 @@ String sessionProbeScript(ListingPlatform platform) {
   }
 }
 
+/// 플랫폼 페이지가 띄운 확인·알림 창을 한방 화면 위에 그대로 띄운다 —
+/// [MirrorPage.onConfirm] · [MirrorPage.onAlert] 에 붙인다.
+///
+/// 사람이 페이지에서 누른 것에 페이지가 되묻는 창이다(다방 「매물 유형을 변경할 경우
+/// 매물정보가 초기화 됩니다」, 광고 종료 확인 등). 한방은 답을 지어내지 않고 묻기만 한다.
+void attachPlatformDialogs(MirrorPage page, BuildContext Function() context) {
+  page.onConfirm = (message) async {
+    final at = context();
+    if (!at.mounted) return false;
+    final answer = await showDialog<bool>(
+      context: at,
+      builder: (dialog) => AlertDialog(
+        title: Text('${page.platform.label}에서 묻고 있어요'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(true),
+            child: const Text('확인'),
+          ),
+        ],
+      ),
+    );
+    return answer == true;
+  };
+  page.onAlert = (message) async {
+    final at = context();
+    if (!at.mounted) return;
+    await showDialog<void>(
+      context: at,
+      builder: (dialog) => AlertDialog(
+        title: Text('${page.platform.label} 알림'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(),
+            child: const Text('확인'),
+          ),
+        ],
+      ),
+    );
+  };
+}
+
 /// What 한방 says when a platform sends the agent back to its sign-in page.
 String signInLost(ListingPlatform platform) =>
     '${platform.label} 로그인이 풀렸어요. 플랫폼 연동을 다시 해주세요.';
@@ -948,6 +1063,12 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
     onPhotoTransferComplete: widget.onPhotoTransferComplete,
     loadTimeout: null,
   )..addListener(_changed);
+
+  @override
+  void initState() {
+    super.initState();
+    attachPlatformDialogs(session, () => context);
+  }
 
   void _changed() {
     if (mounted) setState(() {});
