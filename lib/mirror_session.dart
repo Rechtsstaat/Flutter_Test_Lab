@@ -10,9 +10,11 @@ import 'package:webview_flutter_android/webview_flutter_android.dart'
 
 import 'android_layout.dart';
 import 'fields.dart';
+import 'listing_rules.dart';
 import 'mobile_layout.dart';
 import 'photo_transfer.dart';
 import 'remote_form.dart';
+import 'takedown.dart';
 
 /// The mirror serves `.../oneroom/index.html` as a 308 to `.../oneroom/`, and
 /// the live sites drop the trailing slash, so the URL that finishes never
@@ -35,6 +37,7 @@ class MirrorPage extends ChangeNotifier {
     required this.platform,
     required Uri url,
     this.watchLabels = const [],
+    this.confirmLabels = const [],
     this.loadTimeout,
   }) : initialUrl = url {
     controller = WebViewController()
@@ -42,7 +45,10 @@ class MirrorPage extends ChangeNotifier {
       ..addJavaScriptChannel(_pressChannel, onMessageReceived: _pressed)
       // iOS uses this otherwise-unused channel as an exact, per-WebView
       // rendezvous point for the native all-frame script bridge.
-      ..addJavaScriptChannel(_frameTargetChannel, onMessageReceived: (_) {});
+      ..addJavaScriptChannel(_frameTargetChannel, onMessageReceived: (_) {})
+      ..addJavaScriptChannel(_autoAnswerChannel, onMessageReceived: _autoAnswer)
+      ..setOnJavaScriptConfirmDialog(_confirm)
+      ..setOnJavaScriptAlertDialog(_alert);
     configure(controller);
     controller.setNavigationDelegate(
       NavigationDelegate(
@@ -87,11 +93,19 @@ class MirrorPage extends ChangeNotifier {
   static const _pressChannel = 'MirrorPress';
   static int _nextFrameTarget = 0;
 
+  /// 어댑터가 「지금부터 내가 누른다」·「다 눌렀다」를 알리는 채널([autoAnswerScript]).
+  static const _autoAnswerChannel = 'FlrAutoAnswer';
+
   final String _frameTargetChannel = 'FrameScriptTarget_${_nextFrameTarget++}';
 
   final ListingPlatform platform;
   final Uri initialUrl;
   final List<String> watchLabels;
+
+  /// [watchLabels] 를 누른 **뒤에** 플랫폼이 한 번 더 묻는 자리의 확인 단추
+  /// ([ListingPlatform.takedownConfirmLabels]). 비어 있으면 첫 누름이 곧 그 일이다.
+  final List<String> confirmLabels;
+
   final Duration? loadTimeout;
   late final WebViewController controller;
   Timer? _timeout;
@@ -99,6 +113,54 @@ class MirrorPage extends ChangeNotifier {
 
   bool loaded = false;
   String? failure;
+
+  /// 플랫폼 페이지의 `confirm()` 을 사람에게 묻는 곳. 화면이 붙여 준다.
+  ///
+  /// **붙이지 않으면 WebView 는 확인 창마다 「취소」로 답한다**(webview_flutter 의
+  /// 기본값, iOS·Android 모두). 다방은 매물 유형을 바꿀 때와 관리비 부과 방식 탭을
+  /// 바꿀 때 `confirm()` 으로 되묻고 「취소」면 아무것도 바꾸지 않는다 — 그래서 예전에는
+  /// 오피스텔·아파트로도, 관리비 「기타부과」·「확인불가」로도 끝내 넘어가지 못했다
+  /// (실물 번들 실측 2026-09-21).
+  Future<bool> Function(String message)? onConfirm;
+
+  /// 플랫폼 페이지의 `alert()` 을 사람에게 보여 주는 곳. 없으면 조용히 넘긴다.
+  Future<void> Function(String message)? onAlert;
+
+  /// 어댑터가 페이지를 다루는 중인가. 그동안의 확인 창은 어댑터가 부른 것이라 「확인」으로
+  /// 답하고, 알림은 사람을 붙잡지 않고 [pageAlerts] 에 적어 둔다.
+  bool autoAnswering = false;
+
+  /// 어댑터가 도는 동안 페이지가 띄운 알림 — 사람이 봐야 할 말일 수 있어 남겨 둔다.
+  final pageAlerts = <String>[];
+
+  void _autoAnswer(JavaScriptMessage message) {
+    autoAnswering = message.message == 'on';
+  }
+
+  /// 사진 다리가 페이지를 다루는 중인가 — 그동안도 사람을 붙잡지 않는다.
+  @protected
+  bool photosRunning = false;
+
+  Future<bool> _confirm(JavaScriptConfirmDialogRequest request) async {
+    if (_disposed) return false;
+    if (autoAnswering || photosRunning) return true;
+    final ask = onConfirm;
+    // 사람이 누른 것의 확인 창은 **사람이 답한다.** 물을 화면이 없으면 예전처럼
+    // 「취소」다 — 광고 종료처럼 되돌릴 수 없는 확인을 한방이 대신 누르지 않는다.
+    return ask == null ? false : await ask(request.message);
+  }
+
+  Future<void> _alert(JavaScriptAlertDialogRequest request) async {
+    if (_disposed) return;
+    if (autoAnswering || photosRunning) {
+      final message = request.message.trim();
+      if (message.isNotEmpty && !pageAlerts.contains(message)) {
+        pageAlerts.add(message);
+      }
+      return;
+    }
+    await onAlert?.call(request.message);
+  }
 
   /// The label of the platform button the agent pressed, once they have.
   String? pressedLabel;
@@ -110,6 +172,29 @@ class MirrorPage extends ChangeNotifier {
   /// Subclasses add their JavaScript channels here, before the first load.
   @protected
   void configure(WebViewController controller) {}
+
+  /// 눌림을 셀 범위를 좁히는 CSS 선택자, 또는 null(페이지 전체).
+  /// 왜 좁히는지는 [pressWatcherScript] 에 적었다.
+  @protected
+  String? get pressScope => null;
+
+  /// 눌림 감시를 지금 상태로 다시 깐다 — [pressScope] 가 바뀐 뒤에 부른다.
+  /// 두 번째부터는 울타리와 글자만 바꿔 끼운다.
+  @protected
+  Future<void> installPressWatcher() async {
+    if (watchLabels.isEmpty || _disposed) return;
+    try {
+      await controller.runJavaScript(
+        pressWatcherScript(
+          watchLabels,
+          within: pressScope,
+          confirmLabels: confirmLabels,
+        ),
+      );
+    } catch (_) {
+      // A page that navigates away mid-install gets the watcher next load.
+    }
+  }
 
   /// 플랫폼이 로그인 화면으로 되돌려 보냈을 때 그것을 실패로 볼 것인가.
   ///
@@ -128,13 +213,7 @@ class MirrorPage extends ChangeNotifier {
 
   Future<void> _pageFinished(String url) async {
     if (_disposed) return;
-    if (watchLabels.isNotEmpty) {
-      try {
-        await controller.runJavaScript(pressWatcherScript(watchLabels));
-      } catch (_) {
-        // A page that navigates away mid-install gets the watcher next load.
-      }
-    }
+    await installPressWatcher();
     final uri = Uri.tryParse(url);
     if (uri == null || _disposed) return;
     if (leavesOnSignedOut && platform.isSignedOut(uri)) {
@@ -248,7 +327,7 @@ class MirrorSession extends MirrorPage {
     this.onPhotoTransferComplete,
     super.loadTimeout = const Duration(minutes: 3),
   }) : super(
-         url: Uri.parse(platform.formUrl),
+         url: Uri.parse(platform.formUrlFor(values)),
          watchLabels: platform.submitLabels,
        ) {
     status = '${platform.label} 페이지를 여는 중…';
@@ -306,7 +385,12 @@ class MirrorSession extends MirrorPage {
   ];
 
   /// Everything worth showing, blockers first.
-  List<String> get reasons => [...blockers, ...unsupported, ...photoNotes];
+  List<String> get reasons => [
+    ...blockers,
+    ...unsupported,
+    ...photoNotes,
+    for (final alert in pageAlerts) '${platform.label} 알림: $alert',
+  ];
 
   @override
   void configure(WebViewController controller) {
@@ -383,7 +467,14 @@ class MirrorSession extends MirrorPage {
           postcodeBridgeScript(jsonEncode(values['address'] ?? '')),
         );
       }
-      final payload = jsonEncode(values);
+      final payload = jsonEncode(
+        platform == ListingPlatform.daangn
+            ? legacyDaangnValues(values)
+            : values,
+      );
+      // 어댑터가 누르는 것에 페이지가 되묻는 확인 창은 「확인」으로 답한다. 어댑터가
+      // 끝나면 스스로 끈다([autoAnswerScript]).
+      autoAnswering = true;
       await controller.runJavaScript(switch (platform) {
         ListingPlatform.zigbang => zigbangInjectionScript(payload),
         ListingPlatform.dabang => dabangInjectionScript(payload),
@@ -447,6 +538,7 @@ class MirrorSession extends MirrorPage {
       return;
     }
     _photosDone = false;
+    photosRunning = true;
     try {
       final skipped = await transferListingPhotos(
         target: target,
@@ -468,6 +560,7 @@ class MirrorSession extends MirrorPage {
       photoStatus = '사진 첨부가 중단되었습니다.';
       photoFailure = '사진 첨부: $error';
     }
+    photosRunning = false;
     _photosDone = true;
     await _releaseAdapter();
     if (filled) filling = false;
@@ -506,6 +599,165 @@ class MirrorSession extends MirrorPage {
     } on PlatformException {
       return false;
     }
+  }
+}
+
+/// 플랫폼의 **광고 목록** 페이지. 두 가지 일을 한다.
+///
+/// 1. 매물 번호를 알아낸다 — 목록의 카드를 한방이 아는 것(제목·주소·호·금액)과 견주어
+///    이 매물의 번호를 읽는다([listingNumberScript]). 등록을 마친 직후 조용히 한 번
+///    돌고, 그때 못 읽었으면 내릴 때 다시 돈다.
+/// 2. [mark] 면 그 번호의 카드를 화면 가운데로 올리고 테를 둘러
+///    ([takedownCardScript]), **그 카드 안에서 누른 종료만** 이 매물의 종료로 센다.
+///
+/// 누르는 것은 사람이다. 한방은 어느 카드가 그 매물인지만 말해 준다.
+class MirrorListings extends MirrorPage {
+  MirrorListings({
+    required super.platform,
+    required this.values,
+    String? number,
+    this.mark = false,
+    super.loadTimeout = const Duration(minutes: 2),
+  }) : _number = number,
+       super(
+         url: Uri.parse(platform.listingsUrlFor(values)),
+         // 표를 붙이지 않는 자리(등록 직후의 조용한 확인)는 누름을 듣지 않는다.
+         watchLabels: mark ? platform.takedownLabels : const [],
+         confirmLabels: mark ? platform.takedownConfirmLabels : const [],
+       );
+
+  /// 이 매물의 통합 폼 값 — 목록의 카드와 견줄 재료.
+  final Map<String, dynamic> values;
+
+  /// 찾은 카드에 표를 붙이고 눌림을 그 안으로 가둘 것인가.
+  final bool mark;
+
+  String? _number;
+
+  /// 플랫폼이 이 매물에 붙인 번호. 들고 온 것이거나, 목록에서 읽어 낸 것이다.
+  String? get number => _number;
+
+  /// 번호를 찾는 일이 끝났는가 — 찾았든, 목록을 다 읽고도 못 찾았든.
+  bool numberSettled = false;
+
+  /// 무엇이 같아서 그 카드라고 보았는가 (「제목·주소·호」). 화면에 적지는 않지만,
+  /// 엉뚱한 번호를 물어 왔을 때 어디서 어긋났는지 여기서부터 본다.
+  List<String> matchedOn = const [];
+
+  /// 목록에서 그 번호의 카드를 찾아 표를 붙였는가.
+  bool cardFound = false;
+
+  /// 플랫폼 자신의 검색창에 번호를 넣어 봤는가.
+  bool searched = false;
+
+  /// 목록을 다 뒤지고도 그 카드를 찾지 못했는가.
+  bool cardGaveUp = false;
+
+  /// 한방이 이 매물을 목록에서 짚어 주기를 포기했는가 — 번호도 못 읽었거나,
+  /// 번호는 알아도 그 카드가 이 페이지에 없거나.
+  bool get gaveUp =>
+      cardGaveUp || (numberSettled && _number == null) || failure != null;
+
+  /// **표가 붙은 카드 안에서 누른 것만 센다.**
+  ///
+  /// 아직 찾는 중일 때도 울타리는 쳐 둔다. 그사이에 사람이 옆 매물의 종료를 눌렀다면
+  /// 그것은 이 매물의 종료가 아니고, 그것을 이 매물의 종료로 적는 것이 이 화면이
+  /// 할 수 있는 가장 나쁜 일이다.
+  ///
+  /// 끝내 못 찾았을 때만 울타리를 푼다 — 그때는 사람이 제 손으로 찾아 눌러야 하고,
+  /// 울타리가 남아 있으면 그 누름을 한방이 못 듣는다.
+  @override
+  String? get pressScope => cardFound || !gaveUp ? takedownCardSelector : null;
+
+  @override
+  void configure(WebViewController controller) {
+    controller
+      ..addJavaScriptChannel('ListingNumber', onMessageReceived: _numberIn)
+      ..addJavaScriptChannel('TakedownCard', onMessageReceived: _cardIn);
+  }
+
+  /// 이 페이지에 번호를 읽는 스크립트를 이미 걸었는가. 스크립트는 목록이 그려질
+  /// 때까지 스스로 기다리므로, 두 번 걸면 기다리는 고리가 둘이 된다.
+  bool _probing = false;
+
+  @override
+  Future<void> onPage(Uri url) async {
+    markLoaded();
+    // 페이지를 새로 실었다면 앞에 건 것은 그 페이지와 함께 사라졌다.
+    _probing = false;
+    await _work();
+  }
+
+  /// 다방프로는 한 장짜리 앱이라 목록으로 가는 것도 페이지 로드 없이 주소만 바뀐다.
+  /// 그때는 스크립트가 그대로 살아 있으므로 표만 다시 붙인다.
+  @override
+  Future<void> onRoute(Uri url) async {
+    if (!loaded) return;
+    await _work();
+  }
+
+  Future<void> _work() async {
+    if (_disposed) return;
+    try {
+      if (_number != null) {
+        await _markCard();
+      } else if (!_probing) {
+        _probing = true;
+        await controller.runJavaScript(listingNumberScript(platform, values));
+      }
+    } catch (_) {
+      // 넘어가는 중인 페이지는 답이 없다. 다음 로드에서 다시 건다.
+      _probing = false;
+    }
+  }
+
+  Future<void> _markCard() async {
+    final number = _number;
+    if (!mark || number == null || _disposed) return;
+    await controller.runJavaScript(takedownCardScript(platform, number));
+  }
+
+  void _numberIn(JavaScriptMessage message) {
+    if (_disposed) return;
+    try {
+      final result = jsonDecode(message.message) as Map<String, dynamic>;
+      final found = '${result['number'] ?? ''}'.trim();
+      if (found.isNotEmpty) {
+        _number = found;
+        matchedOn = List<String>.from(result['why'] as List? ?? const []);
+      }
+    } catch (_) {
+      // 해석하지 못한 답은 「못 찾았다」와 같다.
+    }
+    numberSettled = true;
+    stopLoadTimeout();
+    if (_number != null) {
+      unawaited(_markCard());
+    } else {
+      // 번호를 못 읽었으면 여기서 끝이다 — 울타리를 풀어 사람이 직접 찾을 수 있게.
+      unawaited(installPressWatcher());
+    }
+    notifyListeners();
+  }
+
+  void _cardIn(JavaScriptMessage message) {
+    if (_disposed) return;
+    final bool found;
+    final bool over;
+    try {
+      final result = jsonDecode(message.message) as Map<String, dynamic>;
+      found = result['found'] == true;
+      over = result['gaveUp'] == true;
+      searched = result['searched'] == true;
+    } catch (_) {
+      return;
+    }
+    final changed = cardFound != found || cardGaveUp != over;
+    cardFound = found;
+    cardGaveUp = over;
+    // 울타리가 생겼거나 없어졌다 — 감시를 다시 깐다.
+    if (changed) unawaited(installPressWatcher());
+    notifyListeners();
   }
 }
 
@@ -664,6 +916,53 @@ String sessionProbeScript(ListingPlatform platform) {
   }
 }
 
+/// 플랫폼 페이지가 띄운 확인·알림 창을 한방 화면 위에 그대로 띄운다 —
+/// [MirrorPage.onConfirm] · [MirrorPage.onAlert] 에 붙인다.
+///
+/// 사람이 페이지에서 누른 것에 페이지가 되묻는 창이다(다방 「매물 유형을 변경할 경우
+/// 매물정보가 초기화 됩니다」, 광고 종료 확인 등). 한방은 답을 지어내지 않고 묻기만 한다.
+void attachPlatformDialogs(MirrorPage page, BuildContext Function() context) {
+  page.onConfirm = (message) async {
+    final at = context();
+    if (!at.mounted) return false;
+    final answer = await showDialog<bool>(
+      context: at,
+      builder: (dialog) => AlertDialog(
+        title: Text('${page.platform.label}에서 묻고 있어요'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(true),
+            child: const Text('확인'),
+          ),
+        ],
+      ),
+    );
+    return answer == true;
+  };
+  page.onAlert = (message) async {
+    final at = context();
+    if (!at.mounted) return;
+    await showDialog<void>(
+      context: at,
+      builder: (dialog) => AlertDialog(
+        title: Text('${page.platform.label} 알림'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(),
+            child: const Text('확인'),
+          ),
+        ],
+      ),
+    );
+  };
+}
+
 /// What 한방 says when a platform sends the agent back to its sign-in page.
 String signInLost(ListingPlatform platform) =>
     '${platform.label} 로그인이 풀렸어요. 플랫폼 연동을 다시 해주세요.';
@@ -685,13 +984,42 @@ Future<void> clearPlatformSessions() async {
 
 /// Installs a capture-phase listener that reports trusted presses of the
 /// buttons named in [labels] to the `MirrorPress` channel. Installing it twice
-/// only swaps the labels.
-String pressWatcherScript(List<String> labels) =>
+/// only swaps the labels (and [within]).
+///
+/// [within] 은 「이 상자 안에서 누른 것만 센다」는 울타리다 (CSS 선택자). 광고 목록에는
+/// 같은 글자의 종료 버튼이 매물 수만큼 있고, 그중 **한방이 표를 붙인 카드 안에서** 누른
+/// 것만이 이 매물을 내린 것이다 — 울타리가 없으면 옆 매물을 내린 누름을 이 매물의
+/// 종료로 적게 된다. 울타리가 없는 자리(등록 폼)는 지금처럼 페이지 전체를 본다.
+///
+/// [confirmLabels] 는 **두 걸음짜리 종료**를 위한 것이다. 직방 카드의 「매물 종료하기」는
+/// 모달을 열 뿐이고, 광고를 정말 내리는 것은 그 모달의 「네, 종료합니다」다. 첫 누름을
+/// 종료로 세면 광고는 그대로 남은 채 한방만 내렸다고 적는다 — 그래서 첫 누름은
+/// **겨누기만** 하고, 확인 단추가 눌릴 때 비로소 알린다.
+///
+/// 확인 단추는 모달 안에 있어 카드 **밖**일 수 있으므로 울타리를 적용하지 않는다.
+/// 대신 겨눈 뒤에만 세고, 그사이 다른 것을 누르면(「아니오」·바깥 클릭) 겨냥을 푼다.
+/// 비어 있으면 예전 그대로 — 첫 누름이 곧 그 일이다(다방은 네이티브 `confirm` 으로
+/// 한 번 더 묻고, 그 답은 [MirrorPage._confirm] 이 사람에게 넘긴다).
+String pressWatcherScript(
+  List<String> labels, {
+  String? within,
+  List<String> confirmLabels = const [],
+}) =>
     '''
 (() => {
   const labels = ${jsonEncode(labels)};
-  if (window.__flrPressWatch) { window.__flrPressWatch.labels = labels; return; }
-  const watch = window.__flrPressWatch = {labels};
+  const within = ${jsonEncode(within)};
+  const confirmLabels = ${jsonEncode(confirmLabels)};
+  if (window.__flrPressWatch) {
+    window.__flrPressWatch.labels = labels;
+    window.__flrPressWatch.within = within;
+    window.__flrPressWatch.confirmLabels = confirmLabels;
+    return;
+  }
+  const watch = window.__flrPressWatch = {labels, within, confirmLabels, armed: null};
+  // 겨냥은 오래 남겨 두지 않는다. 모달을 열어 둔 채 딴 일을 하다 한참 뒤에 누른
+  // 확인이 이 매물의 것이라는 보장이 없다.
+  const armFor = 120000;
   const norm = value => String(value || '').replace(/\\s+/g, ' ').trim();
   const blocked = el => el.disabled || el.getAttribute('aria-disabled') === 'true' ||
     el.classList.contains('cursor-not-allowed');
@@ -702,10 +1030,32 @@ String pressWatcherScript(List<String> labels) =>
       event.target.closest('button, [role="button"], input[type="submit"], a');
     if (!el || blocked(el)) return;
     const label = norm(el.innerText || el.value || el.textContent);
-    if (!watch.labels.includes(label)) return;
-    try {
-      window.MirrorPress.postMessage(JSON.stringify({label, url: location.href}));
-    } catch (_) {}
+    const tell = said => {
+      try {
+        window.MirrorPress.postMessage(JSON.stringify({label: said, url: location.href}));
+      } catch (_) {}
+    };
+    // 확인 단추 — 울타리 밖(모달)에 있어도 좋지만, 겨눈 뒤여야 한다.
+    if (watch.confirmLabels.includes(label)) {
+      const armed = watch.armed;
+      watch.armed = null;
+      if (armed && Date.now() - armed.at < armFor) tell(armed.label);
+      return;
+    }
+    // 종료 단추 — 울타리 안에서 누른 것만 본다. 그 밖의 누름은(모달의 「아니오」,
+    // 옆 카드, 아무 데나) 겨냥을 푼다. 겨눠 둔 채 딴 것을 눌렀다면 그 종료는
+    // 없던 일이다.
+    const takedown = watch.labels.includes(label) &&
+      (!watch.within || !!el.closest(watch.within));
+    if (!takedown) {
+      watch.armed = null;
+      return;
+    }
+    if (!watch.confirmLabels.length) {
+      tell(label);
+      return;
+    }
+    watch.armed = {label, at: Date.now()};
   }, true);
 })();
 ''';
@@ -764,6 +1114,12 @@ class _RemoteFormPageState extends State<RemoteFormPage> {
     onPhotoTransferComplete: widget.onPhotoTransferComplete,
     loadTimeout: null,
   )..addListener(_changed);
+
+  @override
+  void initState() {
+    super.initState();
+    attachPlatformDialogs(session, () => context);
+  }
 
   void _changed() {
     if (mounted) setState(() {});

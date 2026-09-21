@@ -9,17 +9,18 @@ import '../design/components.dart';
 import '../design/tokens.dart';
 import '../fields.dart';
 import '../kakao_address.dart';
+import '../listing_rules.dart';
 import '../models/listing.dart';
+import '../photo_transfer.dart';
 import 'publish_flow_page.dart';
 
 /// 201 광고 입력 폼 — one long page in the hi-fi's seven sections, ending in
 /// 플랫폼 선택 and the 광고 등록 CTA.
 ///
-/// The sections are the hi-fi's; the data underneath is still the 50 master
-/// rows the mirror adapters read (plus the hi-fi's own extras, see
-/// [HifiField]). Where the hi-fi draws one control for what the master keeps as
-/// two rows — 구조 + 복층 여부 → 방 구조, 입주가능일 + its checkboxes → 입주 방식 —
-/// the form writes both.
+/// The sections are the hi-fi's; the data underneath is the master rows the
+/// adapters read (plus the hi-fi's own extras, see [HifiField]). **Whatever
+/// passes this form, 직방 and 다방 both take** — the rules live in
+/// `lib/listing_rules.dart` and were read off the live forms.
 class ListingFormPage extends StatefulWidget {
   const ListingFormPage({
     super.key,
@@ -44,6 +45,10 @@ class ListingFormPage extends StatefulWidget {
   State<ListingFormPage> createState() => _ListingFormPageState();
 }
 
+/// 두 플랫폼이 다 받는 사진 — 직방이 JPG·PNG 만, 장당 10MB까지 받는다.
+const _photoTypes = {'image/jpeg', 'image/png'};
+final _photoMaxBytes = PhotoTarget.zigbang.maxBytes;
+
 class _ListingFormPageState extends State<ListingFormPage> {
   final values = <String, dynamic>{};
   final _controllers = <String, TextEditingController>{};
@@ -67,6 +72,7 @@ class _ListingFormPageState extends State<ListingFormPage> {
       values.addAll(initial.values);
       photos.addAll(initial.photoPaths.map(XFile.new));
       _channels.addAll(initial.channels.keys);
+      migrateLegacyValues(values);
     }
     final linked = widget.store?.linked ?? const <ListingPlatform>{};
     if (_channels.isEmpty) {
@@ -74,9 +80,6 @@ class _ListingFormPageState extends State<ListingFormPage> {
     }
     // 예전에 고른 것·연동해 둔 것 중에 잠시 내려 둔 플랫폼이 있으면 여기서 빠진다
     _channels.removeWhere((platform) => !platform.isLive);
-    // The hi-fi only asks for 주실 방향 and only offers a "주차 불가" box, so
-    // the master rows behind them start from those readings.
-    values.putIfAbsent('directionBase', () => '주실 기준');
     values.putIfAbsent('trade', () => '월세');
     values.putIfAbsent('parking', () => '주차 가능');
     _deriveFromMaster();
@@ -94,15 +97,13 @@ class _ListingFormPageState extends State<ListingFormPage> {
   void _deriveFromMaster() {
     final layout = '${values['roomLayout'] ?? ''}';
     if (layout.isNotEmpty) {
-      values[HifiField.duplex] = layout.startsWith('복층') ? '복층' : '단층';
+      values[HifiField.duplex] ??= layout.startsWith('복층') ? '복층' : '단층';
       if (!layout.startsWith('복층')) {
-        values[HifiField.structure] = layout.startsWith('분리') ? '분리형' : '오픈형';
+        values[HifiField.structure] ??= layout.startsWith('분리') ? '분리형' : '오픈형';
       }
-      values[HifiField.structure] ??= '오픈형';
     }
     if (values['moveInType'] != null) {
       values['moveInImmediate'] ??= values['moveInType'] == '즉시 입주';
-      values['moveInNegotiable'] ??= values['moveInType'] == '협의 가능';
     }
     final facilities = values['facilities'];
     if (facilities is List && values[HifiField.evCharger] == null) {
@@ -126,13 +127,16 @@ class _ListingFormPageState extends State<ListingFormPage> {
     });
   }
 
-  /// Keeps the master rows in step with the hi-fi controls that feed them.
+  /// Keeps the master rows in step with the hi-fi controls that feed them, and
+  /// drops what a choice has switched off — a value the form no longer shows
+  /// must not reach a platform.
   void _sync(String key) {
     switch (key) {
-      case HifiField.structure || HifiField.duplex:
+      case HifiField.structure || HifiField.duplex || 'rooms':
         final layout = roomLayoutFrom(
           structure: values[HifiField.structure] as String?,
           duplex: values[HifiField.duplex] as String?,
+          rooms: roomCount(values),
         );
         if (layout == null) {
           values.remove('roomLayout');
@@ -144,18 +148,69 @@ class _ListingFormPageState extends State<ListingFormPage> {
         list.remove(evChargerFacility);
         if (values[key] == '있음') list.add(evChargerFacility);
         values['facilities'] = list;
-      case 'moveInDate' || 'moveInNegotiable' || 'moveInImmediate':
+      case 'moveInDate' || 'moveInImmediate':
         if (values['moveInImmediate'] == true) {
           values['moveInType'] = '즉시 입주';
         } else if (!_blank('moveInDate')) {
           values['moveInType'] = '날짜 지정';
-        } else if (values['moveInNegotiable'] == true) {
-          values['moveInType'] = '협의 가능';
         } else {
           values.remove('moveInType');
         }
-      case 'loanAmount':
-        if (!_blank('loanAmount')) values['loan'] = '있음';
+      case 'trade':
+        if (values['trade'] != '월세') {
+          values.remove('shortTerm');
+          _clear(['monthlyRent', 'shortTermMonths', 'shortTermNegotiation']);
+        }
+        if (values['trade'] == '매매') {
+          _clear(['deposit', 'lh']);
+        } else {
+          _clear(['salePrice']);
+        }
+      case 'shortTerm':
+        if (values['shortTerm'] != true) {
+          _clear(['shortTermMonths', 'shortTermNegotiation']);
+        }
+      case 'loan':
+        if (values['loan'] == '없음') _clear(['loanAmount']);
+      case 'propertyType':
+        if (!isComplexProperty(values)) _clear(['complexName']);
+        final use = values['buildingUse'];
+        if (isComplexProperty(values) &&
+            use != null &&
+            !complexBuildingUses.contains(use)) {
+          values.remove('buildingUse');
+        }
+        if (!floorChoices(values).contains(_text('floor'))) {
+          values.remove('floor');
+        }
+      case 'floorAll':
+        if (!floorChoices(values).contains(_text('floor'))) {
+          values.remove('floor');
+        }
+      case 'floorPrivate':
+        if (values['floorPrivate'] != true) values.remove(HifiField.floorBand);
+      case 'appliances':
+        final list = values['appliances'] as List? ?? const [];
+        if (!list.contains('에어컨')) values.remove('airconType');
+      case 'manageBasis':
+        if (values['manageBasis'] != '기타 직접 입력') _clear(['manageBasisNote']);
+      case 'otherFeeReason':
+        if (values['otherFeeReason'] != '기타') _clear(['otherFeeNote']);
+      case 'ownerPhoneDuplicateReason':
+        if (values['ownerPhoneDuplicateReason'] != '기타') {
+          _clear(['ownerPhoneDuplicateNote']);
+        }
+      case 'mediationMethod':
+        if (values['mediationMethod'] != '기타 방법으로 확인') {
+          _clear(['mediationNote']);
+        }
+    }
+  }
+
+  void _clear(List<String> keys) {
+    for (final key in keys) {
+      values.remove(key);
+      _controllers[key]?.clear();
     }
   }
 
@@ -175,20 +230,19 @@ class _ListingFormPageState extends State<ListingFormPage> {
           values[field.key] = '없음';
           values.remove('loanAmount');
         case InputType.manageDetails:
-          values[field.key] = {
-            for (final fee in manageFeeItems)
-              fee: (values['manageIncludes'] as List? ?? const []).contains(fee)
-                  ? '정액 부과'
-                  : '실비 부과',
-          };
+          values.remove(field.key);
         case InputType.addressSearch:
+          /* 카카오 주소 검색이 이 주소로 실제로 돌려주는 값 그대로다(2026-09-22 실측).
+           * 지번으로 고른 주소라 [address] 는 지번이고, 도로명은 따로 들고 있는다. */
           values[field.key] = field.example;
-          values['roadAddress'] = field.example;
-          // Drop details left over from an earlier real search.
-          values.remove('jibunAddress');
+          values['jibunAddress'] = field.example;
+          values['roadAddress'] = '경북 포항시 남구 상공로6번길 60';
           values.remove('buildingName');
-          values['postalCode'] = '06236';
-          values['legalDongCode'] = '1168010100';
+          values['postalCode'] = '37828';
+          values['legalDongCode'] = '4711110200';
+          values['sido'] = '경북';
+          values['sigungu'] = '포항시 남구';
+          values['bname'] = '대도동';
         case InputType.photoPicker:
           values[field.key] = photos.length;
         default:
@@ -201,181 +255,74 @@ class _ListingFormPageState extends State<ListingFormPage> {
           ? List<String>.of(example.cast())
           : example;
     }
+    /* 자동 채우기는 **실제 광고 하나**다 — 직방 원룸 광고 50459044
+     * (경북 포항시 남구 대도동 168-7, 단독주택 오픈형 원룸, 월세 200/20).
+     *
+     * 단지명·단기·동 정보처럼 이 매물에 없는 조건부 칸은 비워 둔다. 예시가 켜 두면
+     * 폼이 끈 칸에 값이 남는다. */
+    for (final key in [
+      'complexName',
+      'building',
+      'manageBasisNote',
+      'otherFeeNote',
+      'mediationNote',
+      'ownerPhoneDuplicateNote',
+      /* 의뢰인 성함·연락처는 **자동으로 채우지 않는다.**
+       *
+       * 두 곳 다 필수가 아니고(직방은 그 위에 「(선택사항)」이라 적어 두었다, 다방에는
+       * 칸이 없다), 무엇보다 이 칸은 **실제 사람의 번호**를 적는 자리다. 예시 번호가
+       * 앉아 있으면 연습이 남의 번호를 계정의 이름으로 조회하게 만들거나
+       * ([sampleOwnerPhone]), 그대로 두고 올려 엉뚱한 사람의 번호가 광고에 실린다.
+       * 비워 두면 등록은 그대로 되고, 필요한 사람이 제 손으로 적는다. */
+      'ownerPhone',
+      HifiField.ownerName,
+    ]) {
+      values.remove(key);
+    }
     values['moveInImmediate'] = values['moveInType'] == '즉시 입주';
-    // An immediate move-in has no date; leaving the example in would show a
-    // date in a field the form has switched off.
     if (values['moveInImmediate'] == true) values.remove('moveInDate');
-    values.remove(HifiField.structure);
+    values['roomLayout'] = '오픈형 원룸';
+    for (final key in [...values.keys]) {
+      if (!fieldVisible(values, key) &&
+          key != 'moveInType' &&
+          key != 'moveInImmediate') {
+        values.remove(key);
+      }
+    }
     _deriveFromMaster();
     _sync(HifiField.evCharger);
     for (final entry in _controllers.entries) {
-      entry.value.text = _text(entry.key);
+      entry.value.text = _amountText(entry.key) ?? _text(entry.key);
     }
     setState(() => _showMissing = false);
   }
 
-  bool _visible(String key) {
-    final trade = values['trade'];
-    final rent = trade == '월세' || trade == '전세';
-    final fee = values['noManagementFee'] != true;
-    final fixed = fee && values['manageMethod'] == '정액 관리비';
-    return switch (key) {
-      'deposit' || 'lh' => rent,
-      'monthlyRent' => trade == '월세',
-      'salePrice' => trade == '매매',
-      'manageMethod' => fee,
-      'manageBasis' || 'managementFee' || 'manageIncludes' => fixed,
-      'manageDetail' =>
-        fixed && (num.tryParse(_text('managementFee')) ?? 0) >= 10,
-      'otherFeeReason' => fee && values['manageMethod'] == '기타 부과',
-      'unknownFeeReason' => fee && values['manageMethod'] == '확인 불가',
-      'parkingCount' ||
-      HifiField.monthlyParkingFee ||
-      'parkingPerHousehold' => values['parking'] == '주차 가능',
-      _ => true,
-    };
+  /// A 비목 amount controller's text (`manageDetail.<item>.amount|note`).
+  String? _amountText(String key) {
+    if (!key.startsWith('manageDetail.')) return null;
+    final parts = key.split('.');
+    return '${feeItem(values, parts[1])[parts[2]] ?? ''}';
   }
 
-  /// Whether a row gets the red asterisk right now.
-  bool _required(String key) {
-    if (!_visible(key)) return false;
-    return switch (key) {
-      'building' => values['singleBuilding'] != true,
-      'deposit' || 'lh' || 'monthlyRent' || 'salePrice' => true,
-      'manageBasis' || 'managementFee' || 'manageIncludes' => true,
-      'moveInDate' => values['moveInImmediate'] != true,
-      'parkingCount' || HifiField.monthlyParkingFee => true,
-      HifiField.ownerName ||
-      'ownerPhone' ||
-      HifiField.structure ||
-      HifiField.duplex => true,
-      'moveInType' => false,
-      _ => _masterFields[key]?.required ?? false,
-    };
-  }
+  bool _visible(String key) => fieldVisible(values, key);
+  bool _required(String key) => fieldRequired(values, key);
 
   List<String> _violations() {
-    final violations = <String>[];
-    for (final field in groups.expand((g) => g.fields)) {
-      if (!_visible(field.key)) continue;
-      // These rows are conditional; their conditions are checked below.
-      if (const {
-        'deposit',
-        'manageBasis',
-        'managementFee',
-        'manageIncludes',
-        'manageDetail',
-        'otherFeeReason',
-        'unknownFeeReason',
-        'photoCount',
-        'roomLayout',
-      }.contains(field.key)) {
-        continue;
-      }
-      final value = values[field.key];
-      if (field.required &&
-          (value == null || value == '' || (value is List && value.isEmpty))) {
-        violations.add(_label(field.key));
-      }
-    }
-    if (_visible('deposit') && _blank('deposit')) violations.add('보증금');
-    if (values['trade'] == '매매' && _blank('salePrice')) {
-      violations.add('매매 금액');
-    }
-    if (values['parking'] == '주차 가능') {
-      if (_blank('parkingCount')) violations.add('주차 가능 대수');
-      if (_blank(HifiField.monthlyParkingFee)) violations.add('월 주차비');
-    }
-    if (values['singleBuilding'] != true && _blank('building')) {
-      violations.add('동');
-    }
-    if (values['loan'] == '있음' && _blank('loanAmount')) {
-      violations.add('융자금');
-    }
-    if (values['noManagementFee'] != true) {
-      if (values['manageMethod'] == '정액 관리비') {
-        if (_blank('manageBasis')) violations.add('관리비 부과 기준');
-        if (_blank('managementFee')) violations.add('관리비 기본 금액');
-        final includes = values['manageIncludes'];
-        if (includes is! List || includes.isEmpty) {
-          violations.add('관리비 포함 항목');
-        }
-        if (_visible('manageDetail')) {
-          final details = values['manageDetail'];
-          if (details is! Map ||
-              manageFeeItems.any((fee) => '${details[fee] ?? ''}'.isEmpty)) {
-            violations.add('비목별 실비·정액 내역');
-          }
-        }
-      } else if (values['manageMethod'] == '기타 부과' &&
-          _blank('otherFeeReason')) {
-        violations.add('기타 부과 법정 사유');
-      } else if (values['manageMethod'] == '확인 불가' &&
-          _blank('unknownFeeReason')) {
-        violations.add('확인 불가 법정 사유');
-      }
-    }
-    if (values['moveInType'] == '날짜 지정' && _blank('moveInDate')) {
-      violations.add('입주가능일');
-    }
-    if (_visible('lh') && _blank('lh')) violations.add('LH 전세임대 여부');
-    for (final key in [
-      HifiField.structure,
-      HifiField.duplex,
-      HifiField.ownerName,
-      'ownerPhone',
-    ]) {
-      if (_blank(key)) violations.add(_label(key));
-    }
+    final violations = listingViolations(values, channels: _channels);
     /* 사진은 **필수 5~20장**이다.
      *
      * 직방이 그렇게 요구한다 — 「이미지 넣기」 창이 5장을 채우기 전에는 [확인] 을
      * 열어 주지 않는다. 통합 폼에서 5장을 못 채우면 직방 전송은 어차피 사진 없이
-     * 끝나므로, 보내기 전에 여기서 막는다. */
+     * 끝나므로, 보내기 전에 여기서 막는다. JPG·PNG 가 아닌 사진과 10MB 를 넘는 사진은
+     * 고를 때 걸러 낸다([_pickPhotos]). */
     if (photos.length < minListingPhotos || photos.length > maxListingPhotos) {
       violations.add('매물 사진 $minListingPhotos~$maxListingPhotos장');
-    }
-    if (_text('title').length > 30) violations.add('매물 제목은 최대 30자');
-    if (_text('description').length > 1000) {
-      violations.add('매물 상세 설명은 최대 1000자');
     }
     if (_channels.isEmpty) violations.add('광고할 플랫폼');
     return violations.toSet().toList();
   }
 
-  static String _label(String key) => switch (key) {
-    'propertyType' => '매물 종류',
-    'address' => '주소',
-    'building' => '동',
-    'unit' => '호',
-    'exclusiveArea' => '전용면적',
-    'supplyArea' => '공급면적',
-    'floorAll' => '전체 층 수',
-    'floor' => '해당 층 수',
-    'buildingUse' => '건축물 법정 용도',
-    'approvalDate' => '사용승인일',
-    'trade' => '거래 유형',
-    'monthlyRent' => '월세',
-    'manageMethod' => '관리비 부과 방식',
-    'rooms' => '방 수',
-    'bathrooms' => '욕실 수',
-    'directionBase' => '방향 기준',
-    'direction' => '주실 방향',
-    'parking' => '주차 가능 여부',
-    'elevator' => '엘리베이터 유무',
-    'violation' => '위반건축물 해당 여부',
-    'loanAvailable' => '전세자금대출 가능 여부',
-    'petAllowed' => '반려동물 허용',
-    'moveInType' => '입주가능일',
-    'photoCount' => '매물 사진',
-    'title' => '매물 제목',
-    'description' => '매물 상세 설명',
-    HifiField.structure => '구조',
-    HifiField.duplex => '복층 여부',
-    HifiField.ownerName => '임대인 성함',
-    'ownerPhone' => '연락처',
-    _ => _masterFields[key]?.label ?? key,
-  };
+  static String _label(String key) => fieldLabel(key);
 
   /// 임시 저장 — a half-filled listing survives leaving the screen, with no
   /// channel published.
@@ -437,10 +384,24 @@ class _ListingFormPageState extends State<ListingFormPage> {
       MaterialPageRoute(builder: (_) => const KakaoAddressSearchPage()),
     );
     if (result != null && mounted) {
-      setState(() => values.addAll(result.toFormValues()));
+      setState(() {
+        values.addAll(result.toFormValues());
+        // 단지명은 카카오가 알려 준 건물명으로 먼저 채운다 — 다방 단지 목록에서 고를 때
+        // 쓰는 이름이라, 다르면 사람이 고친다.
+        final building = (result.buildingName ?? '').trim();
+        if (isComplexProperty(values) &&
+            building.isNotEmpty &&
+            _blank('complexName')) {
+          values['complexName'] = building;
+          _controller('complexName').text = building;
+        }
+      });
     }
   }
 
+  /// 사진을 고른다. 두 플랫폼이 다 받는 사진만 들인다 — 직방은 JPG·PNG 만, 장당
+  /// 10MB까지 받는다. 시스템 선택기에는 JPEG 로 다시 저장해 달라고 부탁하므로(HEIC
+  /// 도 JPEG 가 된다) 대개 그대로 통과하고, 그래도 못 받는 것은 이유를 적고 뺀다.
   Future<void> _pickPhotos() async {
     setState(() {
       _pickingPhotos = true;
@@ -452,17 +413,48 @@ class _ListingFormPageState extends State<ListingFormPage> {
               ImagePicker().pickMultiImage(
                 limit: maxListingPhotos,
                 requestFullMetadata: false,
+                imageQuality: 90,
+                maxWidth: 3000,
+                maxHeight: 3000,
               ));
       if (!mounted || selected.isEmpty) return;
-      if (photos.length + selected.length > maxListingPhotos) {
-        setState(
-          () => _photoError = '사진은 최대 $maxListingPhotos장까지 올릴 수 있어요.',
-        );
+      final accepted = <XFile>[];
+      final rejected = <String>[];
+      for (final photo in selected) {
+        if (photos.any((existing) => existing.path == photo.path) ||
+            accepted.any((existing) => existing.path == photo.path)) {
+          continue;
+        }
+        String? problem;
+        try {
+          final mime = await validateListingPhoto(photo);
+          if (!_photoTypes.contains(mime)) {
+            problem = 'JPG·PNG 가 아니에요';
+          } else if (await photo.length() > _photoMaxBytes) {
+            problem = '10MB 를 넘어요';
+          }
+        } catch (error) {
+          problem = '읽을 수 없어요';
+        }
+        if (problem == null) {
+          accepted.add(photo);
+        } else {
+          rejected.add('${photo.name}($problem)');
+        }
+      }
+      if (!mounted) return;
+      if (photos.length + accepted.length > maxListingPhotos) {
+        setState(() => _photoError = '사진은 최대 $maxListingPhotos장까지 올릴 수 있어요.');
         return;
       }
       setState(() {
-        photos.addAll(selected);
+        photos.addAll(accepted);
         values['photoCount'] = photos.length;
+        if (rejected.isNotEmpty) {
+          _photoError =
+              '직방이 받지 않는 사진은 빼 두었어요: ${rejected.join(', ')}. '
+              'JPG·PNG 사진을 장당 10MB 이하로 골라 주세요.';
+        }
       });
     } catch (e) {
       if (mounted) setState(() => _photoError = '사진을 불러오지 못했어요: $e');
@@ -471,14 +463,20 @@ class _ListingFormPageState extends State<ListingFormPage> {
     }
   }
 
-  Future<void> _pickDate(String key) async {
+  Future<void> _pickDate(String key, {bool future = false}) async {
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     final current = DateTime.tryParse(_text(key));
+    final first = future ? today : DateTime(1900);
+    final last = future ? DateTime(now.year + 5) : today;
+    var initial = current ?? today;
+    if (initial.isBefore(first)) initial = first;
+    if (initial.isAfter(last)) initial = last;
     final picked = await showDatePicker(
       context: context,
-      initialDate: current ?? now,
-      firstDate: DateTime(1950),
-      lastDate: DateTime(now.year + 5),
+      initialDate: initial,
+      firstDate: first,
+      lastDate: last,
     );
     if (picked == null) return;
     final text =
@@ -516,7 +514,9 @@ class _ListingFormPageState extends State<ListingFormPage> {
     String key, {
     required String hint,
     bool numeric = false,
+    bool integer = false,
     int? maxLength,
+    bool counter = false,
     int lines = 1,
     bool enabled = true,
     TextInputType? keyboard,
@@ -527,10 +527,13 @@ class _ListingFormPageState extends State<ListingFormPage> {
     enabled: enabled,
     lines: lines,
     maxLength: maxLength,
+    counter: counter,
     suffix: suffix,
     keyboard:
         keyboard ??
-        (numeric
+        (integer
+            ? TextInputType.number
+            : numeric
             ? const TextInputType.numberWithOptions(decimal: true)
             : lines > 1
             ? TextInputType.multiline
@@ -538,21 +541,22 @@ class _ListingFormPageState extends State<ListingFormPage> {
     onChanged: (value) => _set(key, value.trim().isEmpty ? null : value),
   );
 
-  Widget _dateInput(String key, {bool enabled = true}) => _input(
-    key,
-    hint: 'YYYY-MM-DD',
-    enabled: enabled,
-    keyboard: TextInputType.datetime,
-    suffix: IconButton(
-      tooltip: '날짜 고르기',
-      onPressed: enabled ? () => _pickDate(key) : null,
-      icon: const Icon(
-        Icons.calendar_today_outlined,
-        size: 18,
-        color: AppColor.iconSecondary,
-      ),
-    ),
-  );
+  Widget _dateInput(String key, {bool enabled = true, bool future = false}) =>
+      _input(
+        key,
+        hint: 'YYYY-MM-DD',
+        enabled: enabled,
+        keyboard: TextInputType.datetime,
+        suffix: IconButton(
+          tooltip: '날짜 고르기',
+          onPressed: enabled ? () => _pickDate(key, future: future) : null,
+          icon: const Icon(
+            Icons.calendar_today_outlined,
+            size: 18,
+            color: AppColor.iconSecondary,
+          ),
+        ),
+      );
 
   Widget _select(
     String key,
@@ -605,7 +609,18 @@ class _ListingFormPageState extends State<ListingFormPage> {
 
   List<Widget> _basic() {
     final single = values['singleBuilding'] == true;
+    final complex = isComplexProperty(values);
     return [
+      _field(
+        'propertyType',
+        _select('propertyType', propertyTypes),
+        below: Text(
+          complex
+              ? '다방은 단지를 골라 등록해요. 단지명·호·세대당 주차 대수를 꼭 적어 주세요.'
+              : '원룸·투룸은 아래 「방 수」와 「구조」로 적어 주세요.',
+          style: AppText.caption,
+        ),
+      ),
       _field(
         'address',
         _TapBox(
@@ -617,12 +632,21 @@ class _ListingFormPageState extends State<ListingFormPage> {
             ? null
             : Text(_addressDetail(), style: AppText.caption),
       ),
+      if (_visible('complexName'))
+        _field(
+          'complexName',
+          _input('complexName', hint: '예: 역삼래미안'),
+          below: const Text(
+            '다방 단지 목록에서 이 이름으로 단지를 찾아요.',
+            style: AppText.caption,
+          ),
+        ),
       _pair(
         _field(
           'building',
-          _input('building', hint: '예: 101동', enabled: !single),
+          _input('building', hint: '예: 101', enabled: !single),
         ),
-        _field('unit', _input('unit', hint: '예: 303호')),
+        _field('unit', _input('unit', hint: '예: 303')),
       ),
       Transform.translate(
         offset: const Offset(0, -Space.s8),
@@ -635,20 +659,15 @@ class _ListingFormPageState extends State<ListingFormPage> {
         }),
       ),
       _field(
-        'propertyType',
-        _select('propertyType', _masterFields['propertyType']!.options),
-      ),
-      _field(
         'buildingUse',
-        _select('buildingUse', _masterFields['buildingUse']!.options),
+        _select('buildingUse', complex ? complexBuildingUses : buildingUses),
         label: '건축물 법정 용도',
       ),
       _pair(
         _field('approvalDate', _dateInput('approvalDate')),
         _field(
           HifiField.householdCount,
-          _input(HifiField.householdCount, hint: '숫자 입력', numeric: true),
-          label: '총 세대수',
+          _input(HifiField.householdCount, hint: '숫자 입력', integer: true),
         ),
       ),
       _field(
@@ -671,58 +690,68 @@ class _ListingFormPageState extends State<ListingFormPage> {
   }
 
   List<Widget> _trade() {
-    final noLoan = values['loan'] == '없음';
     final immediate = values['moveInImmediate'] == true;
+    final loan = values['loan'] as String?;
     return [
       _field('trade', _segment('trade', _masterFields['trade']!.options)),
       if (values['trade'] == '매매')
         _field(
           'salePrice',
-          _input('salePrice', hint: '예: 45000', numeric: true),
+          _input('salePrice', hint: '예: 45000', integer: true),
           label: '매매 금액 (만원)',
         )
       else
         _pair(
           _field(
             'deposit',
-            _input('deposit', hint: '예: 1000', numeric: true),
+            _input('deposit', hint: '예: 1000', integer: true),
             label: '보증금 (만원)',
           ),
           _visible('monthlyRent')
               ? _field(
                   'monthlyRent',
-                  _input('monthlyRent', hint: '예: 65', numeric: true),
+                  _input('monthlyRent', hint: '예: 65', integer: true),
                   label: '월세 (만원)',
                 )
               : const SizedBox.shrink(),
         ),
-      Transform.translate(
-        offset: const Offset(0, -Space.s8),
-        child: _check(
-          '단기 매물',
-          values['shortTerm'] == true,
-          (value) => _set('shortTerm', value),
+      if (_visible('shortTerm'))
+        Transform.translate(
+          offset: const Offset(0, -Space.s8),
+          child: _check(
+            '단기 매물 (계약 기간 1년 미만)',
+            values['shortTerm'] == true,
+            (value) => _set('shortTerm', value),
+          ),
         ),
-      ),
+      if (_visible('shortTermMonths'))
+        _pair(
+          _field(
+            'shortTermMonths',
+            _select(
+              'shortTermMonths',
+              _masterFields['shortTermMonths']!.options,
+              label: (value) => '$value개월',
+            ),
+            label: '계약 기간',
+          ),
+          _field(
+            'shortTermNegotiation',
+            _select('shortTermNegotiation', shortTermNegotiations),
+            label: '기간 협의',
+          ),
+        ),
       _field(
-        'loanAmount',
-        _input('loanAmount', hint: '예: 1000', numeric: true, enabled: !noLoan),
-        label: '융자금 (만원)',
-        below: _check('융자금 없음', noLoan, (value) {
-          if (value) _controller('loanAmount').clear();
-          setState(() {
-            if (value) {
-              values['loan'] = '없음';
-              values.remove('loanAmount');
-            } else {
-              values.remove('loan');
-            }
-          });
-        }),
+        'loan',
+        _segment('loan', loanOptions),
+        label: '융자금 (시세 대비)',
+        below: loan == null || loan == '없음'
+            ? null
+            : _input('loanAmount', hint: '융자금 금액 (만원, 선택)', integer: true),
       ),
       _field(
         'moveInDate',
-        _dateInput('moveInDate', enabled: !immediate),
+        _dateInput('moveInDate', enabled: !immediate, future: true),
         label: '입주가능일',
         below: Wrap(
           spacing: Space.s16,
@@ -742,13 +771,17 @@ class _ListingFormPageState extends State<ListingFormPage> {
       ),
       _field(
         HifiField.moveInNote,
-        _input(HifiField.moveInNote, hint: '예: 5월 말 퇴거 예정, 협의 가능', lines: 3),
+        _input(
+          HifiField.moveInNote,
+          hint: '예: 퇴거일 협의 (10자 이내)',
+          maxLength: moveInNoteMaxLength,
+          counter: true,
+        ),
         label: '입주가능일 추가 설명',
       ),
       _field(
         HifiField.eContract,
         _segment(HifiField.eContract, eContractOptions),
-        label: '전자계약 가능 여부',
       ),
       if (_visible('lh'))
         _field('lh', _segment('lh', _masterFields['lh']!.options)),
@@ -756,13 +789,6 @@ class _ListingFormPageState extends State<ListingFormPage> {
   }
 
   List<Widget> _space() {
-    final floorAll = int.tryParse(_text('floorAll'));
-    final floors = [
-      '지하 1층',
-      '반지하',
-      for (var i = 1; i <= (floorAll ?? 80); i++) '$i',
-      '옥탑',
-    ];
     return [
       _pair(
         _field(
@@ -777,34 +803,44 @@ class _ListingFormPageState extends State<ListingFormPage> {
         ),
       ),
       _pair(
-        _field('floorAll', _input('floorAll', hint: '예: 5', numeric: true)),
+        _field(
+          'floorAll',
+          _input('floorAll', hint: '1~${maxFloorAll(values)}', integer: true),
+        ),
         _field(
           'floor',
-          _select('floor', floors, hint: '예: 2', label: _floorLabel),
+          _select(
+            'floor',
+            floorChoices(values),
+            hint: '예: 2',
+            label: _floorLabel,
+          ),
         ),
       ),
       Transform.translate(
         offset: const Offset(0, -Space.s8),
         child: _check(
-          '층수 비공개',
+          '층수 비공개 (저/중/고로 표시)',
           values['floorPrivate'] == true,
           (value) => _set('floorPrivate', value),
         ),
       ),
-      _field(
-        HifiField.floorBand,
-        _select(HifiField.floorBand, floorBandOptions),
-        label: '층군 구분',
-      ),
+      if (_visible(HifiField.floorBand))
+        _field(
+          HifiField.floorBand,
+          _segment(HifiField.floorBand, floorBandOptions),
+        ),
       _pair(
         _field(
           'rooms',
           _select('rooms', _masterFields['rooms']!.options, label: _countLabel),
         ),
-        _field(
-          HifiField.structure,
-          _select(HifiField.structure, structureOptions),
-        ),
+        _visible(HifiField.structure)
+            ? _field(
+                HifiField.structure,
+                _select(HifiField.structure, structureOptions),
+              )
+            : const SizedBox.shrink(),
       ),
       _field(
         'bathrooms',
@@ -814,6 +850,7 @@ class _ListingFormPageState extends State<ListingFormPage> {
           label: _countLabel,
         ),
       ),
+      _field('directionBase', _segment('directionBase', directionBases)),
       _pair(
         _field(
           'direction',
@@ -822,7 +859,6 @@ class _ListingFormPageState extends State<ListingFormPage> {
         _field(
           HifiField.entranceType,
           _select(HifiField.entranceType, entranceOptions),
-          label: '현관 구조 유형',
         ),
       ),
       _field(HifiField.duplex, _segment(HifiField.duplex, duplexOptions)),
@@ -837,31 +873,15 @@ class _ListingFormPageState extends State<ListingFormPage> {
   static String _floorLabel(String value) =>
       int.tryParse(value) == null ? value : '$value층';
 
+  static const _tierLabels = {
+    '10만원 미만': '10만원 미만',
+    '10만원 이상': '10만원 이상',
+    '10만원 이상 (세부내역 미고지)': '이상·내역 미고지',
+  };
+
   List<Widget> _fee() {
     final none = values['noManagementFee'] == true;
-    final details = Map<String, String>.from(
-      values['manageDetail'] as Map? ?? const <String, String>{},
-    );
     return [
-      _pair(
-        _field(
-          'manageMethod',
-          none
-              ? const _TapBox(text: '관리비 없음', hint: '', onTap: null)
-              : _select('manageMethod', _masterFields['manageMethod']!.options),
-          label: '부과 방식',
-        ),
-        _field(
-          'managementFee',
-          _input(
-            'managementFee',
-            hint: '예: 12',
-            numeric: true,
-            enabled: _visible('managementFee'),
-          ),
-          label: '기본 금액 (만원)',
-        ),
-      ),
       Transform.translate(
         offset: const Offset(0, -Space.s8),
         child: _check(
@@ -870,69 +890,63 @@ class _ListingFormPageState extends State<ListingFormPage> {
           (value) => _set('noManagementFee', value),
         ),
       ),
+      if (_visible('manageMethod'))
+        _field(
+          'manageMethod',
+          _select('manageMethod', _masterFields['manageMethod']!.options),
+          label: '부과 방식',
+        ),
+      if (_visible('feeTier'))
+        _field(
+          'feeTier',
+          _segment('feeTier', feeTiers, labels: _tierLabels),
+          label: '정액 관리비 구간',
+          below: Text(switch (values['feeTier']) {
+            '10만원 이상' => '월 10만원 이상 정액이면 비목별 부과 방식과 금액을 모두 적어야 해요.',
+            '10만원 이상 (세부내역 미고지)' => '의뢰인이 비목별 내역을 알려 주지 않았을 때 골라요.',
+            _ => '총액과 포함 항목을 적어요.',
+          }, style: AppText.caption),
+        ),
       if (_visible('manageBasis'))
         _field(
           'manageBasis',
           _select('manageBasis', _masterFields['manageBasis']!.options),
           label: '부과 기준',
+          below: _visible('manageBasisNote')
+              ? _input(
+                  'manageBasisNote',
+                  hint: '기준을 직접 적어 주세요 (20자 이내)',
+                  maxLength: 20,
+                  counter: true,
+                )
+              : null,
+        ),
+      if (_visible('managementFee'))
+        _field(
+          'managementFee',
+          _input('managementFee', hint: '예: 8', numeric: true),
+          label: '관리비 총액 (만원)',
         ),
       if (_visible('manageIncludes'))
         _field(
           'manageIncludes',
-          _ChipGrid(
-            options: manageFeeItems,
-            selected: Set<String>.from(
-              values['manageIncludes'] as List? ?? const [],
-            ),
-            label: _feeLabel,
-            onTap: (option) {
-              final list = List<String>.from(
-                values['manageIncludes'] as List? ?? [],
-              );
-              if (!list.remove(option)) list.add(option);
-              _set('manageIncludes', list);
-            },
-          ),
+          _chips('manageIncludes', manageFeeItems),
           label: '포함 항목',
         ),
-      if (_visible('manageDetail'))
-        _field(
-          'manageDetail',
-          Column(
-            children: [
-              for (final fee in manageFeeItems)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: Space.s8),
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 88,
-                        child: Text(fee, style: AppText.bodySmall),
-                      ),
-                      Expanded(
-                        child: _Segmented(
-                          options: const ['정액 부과', '실비 부과'],
-                          selected: details[fee],
-                          label: (option) => option,
-                          compact: true,
-                          onTap: (option) {
-                            details[fee] = option;
-                            _set('manageDetail', details);
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-          label: '비목별 실비·정액 내역',
-        ),
+      if (_visible('manageDetail')) ..._feeDetail(),
       if (_visible('otherFeeReason'))
         _field(
           'otherFeeReason',
           _select('otherFeeReason', _masterFields['otherFeeReason']!.options),
-          label: '기타 부과 사유',
+          label: '기타 부과 근거',
+          below: _visible('otherFeeNote')
+              ? _input(
+                  'otherFeeNote',
+                  hint: '근거를 직접 적어 주세요 (20자 이내)',
+                  maxLength: 20,
+                  counter: true,
+                )
+              : null,
         ),
       if (_visible('unknownFeeReason'))
         _field(
@@ -946,16 +960,132 @@ class _ListingFormPageState extends State<ListingFormPage> {
     ];
   }
 
-  static String _feeLabel(String fee) => switch (fee) {
-    '수도료' => '수도',
-    '가스사용료' => '가스',
-    '전기료' => '전기',
-    '난방비' => '난방',
-    _ => fee,
-  };
+  /// 정액 관리비 10만원 이상 — 직방·다방이 똑같이 비목마다 부과 방식과 금액을 받는다.
+  void _setFeeItem(String item, String field, Object? value) {
+    setState(() {
+      final detail = Map<String, dynamic>.from(
+        values['manageDetail'] as Map? ?? const {},
+      );
+      final entry = Map<String, dynamic>.from(detail[item] as Map? ?? const {});
+      if (value == null || (value is String && value.trim().isEmpty)) {
+        entry.remove(field);
+      } else {
+        entry[field] = value is String ? value.trim() : value;
+      }
+      if (field == 'type' &&
+          value != '정액' &&
+          value != '있음' &&
+          item != commonFeeItem) {
+        entry.remove('amount');
+        _controllers['manageDetail.$item.amount']?.clear();
+      }
+      if (field == 'type' && value != '있음' && item == etcFeeItem) {
+        entry.remove('note');
+        _controllers['manageDetail.$item.note']?.clear();
+      }
+      detail[item] = entry;
+      values['manageDetail'] = detail;
+    });
+  }
+
+  Widget _feeAmount(
+    String item, {
+    required bool enabled,
+    String hint = '금액 (원)',
+  }) => _TextBox(
+    controller: _controller('manageDetail.$item.amount'),
+    hint: hint,
+    enabled: enabled,
+    keyboard: TextInputType.number,
+    onChanged: (value) => _setFeeItem(item, 'amount', value),
+  );
+
+  List<Widget> _feeDetail() {
+    Widget row(String item, List<String> ways, {required bool amount}) {
+      final entry = feeItem(values, item);
+      return Padding(
+        padding: const EdgeInsets.only(bottom: Space.s12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(item, style: AppText.bodySmall),
+            const SizedBox(height: Space.s4),
+            _Segmented(
+              options: ways,
+              selected: entry['type'] as String?,
+              label: (option) => option,
+              compact: true,
+              onTap: (option) => _setFeeItem(item, 'type', option),
+            ),
+            if (amount) ...[
+              const SizedBox(height: Space.s8),
+              _feeAmount(item, enabled: true),
+            ],
+          ],
+        ),
+      );
+    }
+
+    final etc = feeItem(values, etcFeeItem);
+    final total = fixedFeeTotal(values);
+    return [
+      _FieldLabel('항목별 관리비', required: _required('manageDetail')),
+      const SizedBox(height: Space.s8),
+      row(commonFeeItem, commonFeeWays, amount: true),
+      for (final item in usageFeeItems)
+        row(item, feeItemWays, amount: feeItem(values, item)['type'] == '정액'),
+      Padding(
+        padding: const EdgeInsets.only(bottom: Space.s12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(etcFeeItem, style: AppText.bodySmall),
+            const SizedBox(height: Space.s4),
+            _Segmented(
+              options: const ['없음', '있음'],
+              selected: etc['type'] as String?,
+              label: (option) => option,
+              compact: true,
+              onTap: (option) => _setFeeItem(etcFeeItem, 'type', option),
+            ),
+            if (etc['type'] == '있음') ...[
+              const SizedBox(height: Space.s8),
+              _TextBox(
+                controller: _controller('manageDetail.$etcFeeItem.note'),
+                hint: '내용 (예: 주차비, 20자 이내)',
+                maxLength: 20,
+                keyboard: TextInputType.text,
+                onChanged: (value) => _setFeeItem(etcFeeItem, 'note', value),
+              ),
+              const SizedBox(height: Space.s8),
+              _feeAmount(etcFeeItem, enabled: true),
+            ],
+          ],
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(bottom: Space.s16),
+        child: Text(
+          '정액 합계 ${_won(total)}원 — 실비 항목은 쓴 만큼 따로 내요.',
+          style: AppText.caption,
+        ),
+      ),
+    ];
+  }
+
+  static String _won(num value) {
+    final digits = value.round().toString();
+    final buffer = StringBuffer();
+    for (var i = 0; i < digits.length; i++) {
+      if (i > 0 && (digits.length - i) % 3 == 0) buffer.write(',');
+      buffer.write(digits[i]);
+    }
+    return buffer.toString();
+  }
 
   List<Widget> _facilities() {
     final noParking = values['parking'] == '주차 불가능';
+    final appliances = values['appliances'] as List? ?? const [];
     return [
       _pair(
         _field(
@@ -963,7 +1093,7 @@ class _ListingFormPageState extends State<ListingFormPage> {
           _input(
             'parkingCount',
             hint: '예: 1',
-            numeric: true,
+            integer: true,
             enabled: !noParking,
           ),
           label: '주차 가능 대수',
@@ -1028,6 +1158,12 @@ class _ListingFormPageState extends State<ListingFormPage> {
         _chips('appliances', homeApplianceOptions),
         label: '기본 가전 옵션',
       ),
+      if (appliances.contains('에어컨'))
+        _field(
+          'airconType',
+          _chips('airconType', airconTypes),
+          label: '에어컨 종류',
+        ),
       _field(
         'appliances',
         _chips('appliances', furnitureOptions),
@@ -1042,6 +1178,11 @@ class _ListingFormPageState extends State<ListingFormPage> {
         'heating',
         _chips('heating', _masterFields['heating']!.options, multi: false),
         label: '난방 방식',
+      ),
+      _field(
+        'roomFeatures',
+        _chips('roomFeatures', roomFeatureOptions),
+        label: '방 특징',
       ),
     ];
   }
@@ -1062,16 +1203,30 @@ class _ListingFormPageState extends State<ListingFormPage> {
       below: Text(
         _photoError ??
             '직방·다방 페이지에 사진이 자동으로 첨부돼요. 첫 장이 대표 사진이고, '
-            '직방은 JPG·PNG 만 장당 10MB까지 받아요.',
+                'JPG·PNG 사진만 장당 10MB까지 올릴 수 있어요.',
         style: AppText.caption.copyWith(
           color: _photoError == null ? null : AppColor.statusError,
         ),
       ),
     ),
-    _field('title', _input('title', hint: '최대 30자로 입력해주세요', maxLength: 30)),
+    _field(
+      'title',
+      _input(
+        'title',
+        hint: '$titleMinLength~$titleMaxLength자, 한글·영문·숫자·쉼표·마침표',
+        maxLength: titleMaxLength,
+        counter: true,
+      ),
+    ),
     _field(
       'description',
-      _input('description', hint: '입력해주세요', lines: 4, maxLength: 1000),
+      _input(
+        'description',
+        hint: '$descriptionMinLength자 이상 입력해주세요. 전화번호·이메일·링크는 넣을 수 없어요.',
+        lines: 5,
+        maxLength: descriptionMaxLength,
+        counter: true,
+      ),
     ),
     _field(HifiField.tags, _chips(HifiField.tags, tagOptions), label: '관심 태그'),
   ];
@@ -1089,13 +1244,46 @@ class _ListingFormPageState extends State<ListingFormPage> {
       ),
     ),
     _field(
+      'ownerPhoneDuplicateReason',
+      _select('ownerPhoneDuplicateReason', ownerPhoneDuplicateReasons),
+      label: '집주인 번호가 이미 쓰였을 때 사유 (선택)',
+      below: _visible('ownerPhoneDuplicateNote')
+          ? _input(
+              'ownerPhoneDuplicateNote',
+              hint: '사유를 5~32자로 적어 주세요',
+              maxLength: 32,
+              counter: true,
+            )
+          : const Text(
+              '직방은 다른 매물에 이미 쓰인 집주인 번호면 사유를 꼭 고르게 해요.',
+              style: AppText.caption,
+            ),
+    ),
+    _field(
+      'mediationMethod',
+      _segment(
+        'mediationMethod',
+        mediationMethods,
+        labels: const {'기타 방법으로 확인': '기타'},
+      ),
+      below: _visible('mediationNote')
+          ? _input('mediationNote', hint: '확인한 방법을 적어 주세요')
+          : null,
+    ),
+    _field(
       HifiField.brokerageRoute,
       _select(HifiField.brokerageRoute, brokerageRoutes),
       label: '중개 수임 경로',
     ),
     _field(
       'privateMemo',
-      _input('privateMemo', hint: '중개 업무에 필요한 내부 메모를 입력해주세요.', lines: 3),
+      _input(
+        'privateMemo',
+        hint: '중개 업무에 필요한 내부 메모를 입력해주세요.',
+        lines: 3,
+        maxLength: privateMemoMaxLength,
+        counter: true,
+      ),
       label: '내부 비밀 메모',
     ),
   ];
@@ -1105,7 +1293,7 @@ class _ListingFormPageState extends State<ListingFormPage> {
     return [
       const _FieldLabel('광고할 플랫폼', required: true),
       const SizedBox(height: Space.s8),
-      for (final platform in ListingPlatform.values)
+      for (final platform in ListingPlatform.values) ...[
         Padding(
           padding: const EdgeInsets.only(bottom: Space.s8),
           child: SelectCard(
@@ -1119,6 +1307,17 @@ class _ListingFormPageState extends State<ListingFormPage> {
             }),
           ),
         ),
+        if (platform.isLive &&
+            _channels.contains(platform) &&
+            platformBlocker(platform, values) != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: Space.s12),
+            child: Text(
+              platformBlocker(platform, values)!,
+              style: AppText.caption.copyWith(color: AppColor.statusError),
+            ),
+          ),
+      ],
     ];
   }
 
@@ -1254,6 +1453,7 @@ InputDecoration _boxDecoration({
   required String hint,
   required bool enabled,
   Widget? suffix,
+  bool counter = false,
 }) {
   OutlineInputBorder border(Color color) => OutlineInputBorder(
     borderRadius: BorderRadius.circular(Radii.r12),
@@ -1265,7 +1465,7 @@ InputDecoration _boxDecoration({
     filled: true,
     fillColor: enabled ? AppColor.bgSurface : AppColor.bgSubtle,
     isDense: true,
-    counterText: '',
+    counterText: counter ? null : '',
     contentPadding: const EdgeInsets.symmetric(
       horizontal: Space.s16,
       vertical: 13,
@@ -1287,6 +1487,7 @@ class _TextBox extends StatelessWidget {
     this.enabled = true,
     this.lines = 1,
     this.maxLength,
+    this.counter = false,
     this.suffix,
   });
 
@@ -1297,22 +1498,32 @@ class _TextBox extends StatelessWidget {
   final bool enabled;
   final int lines;
   final int? maxLength;
+
+  /// 글자 수를 칸 아래에 보여 줄 것인가 — 플랫폼이 글자 수를 따지는 칸(제목·설명·메모).
+  final bool counter;
   final Widget? suffix;
 
   @override
-  Widget build(BuildContext context) => TextField(
-    controller: controller,
-    enabled: enabled,
-    style: AppText.body,
-    minLines: lines,
-    maxLines: lines,
-    maxLength: maxLength,
-    maxLengthEnforcement: MaxLengthEnforcement.none,
-    keyboardType: keyboard,
-    cursorColor: AppColor.actionPrimary,
-    decoration: _boxDecoration(hint: hint, enabled: enabled, suffix: suffix),
-    onChanged: onChanged,
-  );
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      enabled: enabled,
+      style: AppText.body,
+      minLines: lines,
+      maxLines: lines,
+      maxLength: maxLength,
+      maxLengthEnforcement: MaxLengthEnforcement.none,
+      keyboardType: keyboard,
+      cursorColor: AppColor.actionPrimary,
+      decoration: _boxDecoration(
+        hint: hint,
+        enabled: enabled,
+        suffix: suffix,
+        counter: counter,
+      ),
+      onChanged: onChanged,
+    );
+  }
 }
 
 /// A read-only box that opens something — the address search, or a

@@ -1,9 +1,12 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:jibang_listing_test/main.dart';
+import 'package:jibang_listing_test/listing_rules.dart';
+import 'package:jibang_listing_test/takedown.dart';
 import 'package:jibang_listing_test/photo_transfer.dart';
 
 void main() {
@@ -12,12 +15,27 @@ void main() {
    * 직방이 그렇게 요구한다 — 「이미지 넣기」 창은 5장을 채우기 전에는 [확인] 을
    * 열어 주지 않는다(2026-09-08 현장조사 §3-6). 통합 폼이 그보다 느슨하면 그 사진은
    * 등록 흐름 한복판에서 조용히 떨어져 나간다. */
-  test('master form has all 50 fields and photos are required 5~20', () {
+  test('master form keeps the 50 spec rows and photos are required 5~20', () {
     final fields = groups.expand((group) => group.fields).toList();
 
     expect(groups, hasLength(5));
-    expect(fields, hasLength(50));
-    expect(fields.where((field) => field.required), hasLength(29));
+    // 명세서의 50 줄은 번호를 그대로 달고 남아 있다. 51~ 은 실물 폼이 더 물어본 줄이다
+    // (단지명·관리비 상세·의뢰인 연락처 …) — 명세서를 줄인 것이 아니라 덧댄 것이다.
+    expect(fields.where((field) => field.number <= 50), hasLength(50));
+    expect(fields, hasLength(62));
+    expect(fields.map((field) => field.number).toSet(), hasLength(fields.length));
+    // 별표는 세는 것이 아니라 **어느 줄인가**가 뜻이다 — 실물 두 폼이 별을 단 줄만
+    // 남는다(2026-09-22 확인, [fieldRequired] 주석에 근거를 적었다).
+    expect(
+      fields.where((field) => field.required).map((field) => field.key).toSet(),
+      {
+        'propertyType', 'address', 'unit', 'exclusiveArea', 'floorAll', 'floor',
+        'buildingUse', 'approvalDate', 'trade', 'deposit', 'monthlyRent',
+        'manageMethod', 'rooms', 'bathrooms', 'directionBase', 'direction',
+        'parking', 'elevator', 'violation', 'moveInType', 'photoCount',
+        'title', 'description', 'mediationMethod',
+      },
+    );
     expect(
       fields.singleWhere((field) => field.key == 'photoCount').required,
       isTrue,
@@ -51,7 +69,12 @@ void main() {
       expect(fields['manageIncludes']!.type, InputType.multiSelect);
       expect(fields['appliances']!.type, InputType.multiSelect);
       expect(fields['facilities']!.type, InputType.multiSelect);
-      expect(fields['propertyType']!.options, contains('오픈형 원룸'));
+      // 매물 종류는 **건물의 형태**다. 방이 몇 개인지·오픈형인지는 방 구조가 따로 받는다
+      // — 실물 폼이 그렇게 갈라 놓았고(직방은 형태별로 폼 자체가 다르다), 통합 폼도 따른다.
+      expect(fields['propertyType']!.options, contains('빌라/연립/다세대'));
+      expect(fields['propertyType']!.options, isNot(contains('오픈형 원룸')));
+      expect(fields['roomLayout']!.options, contains('오픈형 원룸'));
+      expect(fields['buildingUse']!.options, contains('공동주택'));
       expect(fields['otherFeeReason']!.visibleWhenValue, '기타 부과');
     },
   );
@@ -91,13 +114,27 @@ void main() {
       Map<String, dynamic>? receivedValues;
       ListingPlatform? receivedPlatform;
       List<Object>? receivedPhotos;
+      // 폼은 고른 사진의 바이트를 읽어 진짜 JPG·PNG 인지 본다 — 이름만 사진인 것은
+      // 들이지 않는다. 그래서 여기서도 실제 PNG 를 그 자리에 적어 둔다.
+      // 파일 만들기는 **동기로** 한다 — testWidgets 안에서 기다린 진짜 입출력은
+      // 가짜 시계 위에서 영영 돌아오지 않는다.
+      final album = Directory.systemTemp.createTempSync('listing_cta_');
+      addTearDown(() => album.deleteSync(recursive: true));
+      final picked = [
+        for (var i = 0; i < minListingPhotos; i++)
+          XFile(
+            (File('${album.path}/room-$i.png')..writeAsBytesSync(
+              base64Decode(
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8'
+                '/x8AAwMCAO+aWZkAAAAASUVORK5CYII=',
+              ),
+            )).path,
+          ),
+      ];
       await tester.pumpWidget(
         MaterialApp(
           home: ListingFormPage(
-            pickImages: () async => [
-              for (var i = 0; i < minListingPhotos; i++)
-                XFile('/tmp/room-$i.png'),
-            ],
+            pickImages: () async => picked,
             remotePageBuilder: (values, platform, photos) {
               receivedValues = values;
               receivedPlatform = platform;
@@ -119,14 +156,15 @@ void main() {
       expect(find.textContaining('필수 항목'), findsOneWidget);
 
       // Narrow the run to 다방 in 플랫폼 선택, at the end of the long form.
+      // 처음에는 살아 있는 둘(직방·다방)이 잡혀 있다 — 당근은 내려 두어 고를 수 없다.
       await tester.scrollUntilVisible(
         find.text('플랫폼 선택'),
         600,
         scrollable: find.byType(Scrollable).first,
       );
-      await tester.ensureVisible(find.text('당근'));
+      await tester.ensureVisible(find.text('직방'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('직방'));
-      await tester.tap(find.text('당근'));
       await tester.pump();
       expect(cta().onPressed, isNull);
 
@@ -172,6 +210,14 @@ void main() {
       expect(receivedValues, containsPair('address', isNotEmpty));
       // The hi-fi's 구조 + 복층 여부 still reach the adapters as 방 구조.
       expect(receivedValues, containsPair('roomLayout', '오픈형 원룸'));
+      /* 의뢰인 성함·연락처는 **자동 채우기가 비워 둔다.**
+       *
+       * 실제 사람의 번호를 적는 자리다. 예시가 앉아 있으면 연습이 남의 번호를 계정의
+       * 이름으로 조회하게 만들거나, 그대로 올려 엉뚱한 사람의 번호가 광고에 실린다.
+       * 두 곳 다 필수가 아니므로(직방 「(선택사항)」·다방엔 칸이 없다) 비워 두어도
+       * 등록은 그대로 간다 — 바로 위에서 CTA 가 열린 것이 그 증거다. */
+      expect(receivedValues![HifiField.ownerName] ?? '', isEmpty);
+      expect(receivedValues!['ownerPhone'] ?? '', isEmpty);
     },
   );
 
@@ -308,13 +354,187 @@ void main() {
     },
   );
 
+  /* 실물 확인 2026-09-21(로그인한 계정으로 세 폼을 열어 봄).
+   *
+   * 직방은 매물 종류마다 폼을 따로 두고, **열어 주지 않을 때가 있다** — 남은 광고 수량이
+   * 없으면 「빌라 매물의 광고수량을 모두 이용중입니다」, 상품을 사지 않았으면 「오피스텔
+   * (도시형생활주택) 매물 광고상품 구매 후 이용할 수 있습니다」가 뜨고 폼 본문은 비어 있다.
+   * 그대로 채우러 들어가면 쉰 줄이 모두 「찾지 못했습니다」로 쏟아져 정작 알아야 할
+   * 한 가지가 묻힌다. */
+  test('Zigbang adapter stops when 직방 does not open the form at all', () {
+    final script = zigbangInjectionScript('{}');
+    expect(script, contains("const shut = dialogWith(['광고수량', '광고상품', '상품 구매', '등록이 불가능']);"));
+    expect(script, contains("if (shut || !byName('title')) {"));
+    expect(script, contains('직방이 이 매물 종류의 등록 폼을 열어 주지 않았습니다'));
+    // 먼저 보아야 뜻이 있다 — 건물 종류를 고르기 전에 와야 한다.
+    expect(
+      script.indexOf('const shut = dialogWith('),
+      lessThan(script.indexOf("await pick('propertyType'")),
+    );
+  });
+
+  /* 통합 폼은 한 곳만 받는 값도 필수로 받는다 — 그래야 한 번 채우면 두 폼이 모두 끝난다.
+   * 그 대신 **어디로 갔는지**는 말해 주어야 한다. 실물에서 두 폼의 모든 줄을 훑어
+   * 갈 곳이 없는 값을 추렸다(2026-09-21). */
+  test('adapters say which values the other side has no room for', () {
+    final zigbang = zigbangInjectionScript(
+      '{"supplyArea":"40.12","heating":"개별난방","airconType":["벽걸이형"],'
+      '"roomFeatures":["신축"],"lh":"가능","complexName":"역삼래미안"}',
+    );
+    // 직방 원룸 폼에는 이 여섯 줄이 없다.
+    for (final (key, what) in [
+      ('supplyArea', '공급면적'),
+      ('heating', '난방 방식'),
+      ('airconType', '에어컨 종류'),
+      ('roomFeatures', '방 특징'),
+      ('lh', 'LH 전세임대 여부'),
+      ('complexName', '단지명'),
+    ]) {
+      expect(
+        zigbang,
+        contains("[data.$key, '$what']"),
+        reason: '$what 이 직방에 들어가지 않는다는 안내가 없습니다.',
+      );
+    }
+    expect(zigbang, contains('직방 등록 폼에 대응 입력란이 없어 다방에만 들어갑니다.'));
+
+    // 다방 폼의 일곱 섹션 어디에도 위반건축물·중개 의뢰 방법 줄이 없다.
+    final dabang = dabangInjectionScript('{}');
+    expect(dabang, contains('위반건축물 여부: 다방 등록 폼에 대응 입력란이 없어'));
+    expect(dabang, contains('중개 의뢰를 받은 방법: 다방 등록 폼에 대응 입력란이 없어'));
+    // 「해당 없음」은 굳이 알릴 것이 없다.
+    expect(dabang, contains("data.violation !== '해당 없음'"));
+  });
+
   test('Zigbang adapter fills the address through the Kakao picker', () {
     final script = zigbangInjectionScript('{}');
     expect(script, contains("press(lat)"));
     expect(script, contains('__flrPostcode'));
-    expect(script, contains('소재지 공개 확인'));
+    // 실물 직방은 주소를 받고 나서 「이 주소는 다른 폼으로」라고 되묻는다(아파트·오피스텔).
+    // 어댑터가 대신 답할 수 있는 창이 아니므로, 무슨 말을 들었는지 그대로 적어 올린다.
+    expect(script, contains('watchAddressDialogs();'));
+    expect(script, contains("'아파트 주소로 확인'"));
+    expect(script, contains('직방이 이 주소를 이 폼으로 받지 않는다고 합니다'));
     // 주소는 더 이상 「불가」 항목이 아니다.
     expect(script, isNot(contains('address:')));
+  });
+
+  /* 직방의 전화번호 [확인] 은 칸을 보는 것이 아니라 **직방에 그 번호를 묻는** 일이라
+   * 연습으로 누를 것이 못 된다. 그렇다고 번호만 넣고 누르지 않으면 **등록 자체가
+   * 막힌다** — 직방의 검증기가 「'실매물 확인' 표시 노출을 위해서는, 전화번호를
+   * [확인]해 주셔야 합니다」로 되돌려 보내, 「매물 등록 완료」를 눌러도 아무 일이
+   * 없다(실물 번들 2026-09-22).
+   *
+   * 그래서 연습용 번호는 **칸에 넣지도 않는다.** 의뢰인 정보는 직방이 「(선택사항)」
+   * 이라 적어 둔 자리라 비워 두면 등록은 그대로 된다. */
+  test('Zigbang adapter keeps the auto-fill sample phone out of the form', () {
+    final script = zigbangInjectionScript(
+      jsonEncode({'ownerPhone': sampleOwnerPhone}),
+    );
+    // 연습용 번호는 통합 폼과 **한 곳**에서 온다 — 예시가 바뀌면 빗장도 같이 움직인다.
+    expect(script, contains('const samplePhone = "$sampleOwnerPhone";'));
+    expect(script, contains('if (phone === digits(samplePhone)) {'));
+    // 넣지 않는다. 이미 들어 있으면 비운다 — 넣어 둔 채 안 누르는 것이 등록을 막는다.
+    expect(script, contains("const box = byName('verification.lessorPhone');"));
+    expect(script, contains('if (box && digits(box.value)) setValue(box, \'\');'));
+    // 빗장은 **채우기보다 먼저** 와야 한다.
+    expect(
+      script.indexOf('if (phone === digits(samplePhone)) {'),
+      lessThan(script.indexOf("fillIn('ownerPhone', 'verification.lessorPhone'")),
+    );
+    // 막는 것이 아니라 알리는 것이다 — 비워 두면 등록은 그대로 된다.
+    expect(script, contains('의뢰인 전화번호: 통합 폼 예시의 연습용 번호'));
+    expect(script, isNot(contains("miss('ownerPhone.confirm', '통합 폼 예시")));
+    // 실제 번호는 예전 그대로 채워지고 눌린다 — 빗장은 이 한 번호에만 걸린다.
+    expect(script, contains("mark('ownerPhone.confirm', true)"));
+    expect(script, contains('press(button);'));
+  });
+
+  /* 통합 폼의 별표는 **실물 두 폼에서만** 온다. 로그인한 계정으로 직방 원룸 폼
+   * (`span.text-red-500` 25줄)과 다방 월세 폼(`th` 의 `*` 20줄)을 열어 별을 세었다
+   * (2026-09-22). 한 곳이라도 별을 달면 필수, 두 곳 다 달지 않으면 선택이다.
+   *
+   * 칸을 없애지는 않는다 — 한 곳에만 있는 줄도 통합 폼은 받아 둔다. 받아 두되
+   * 막지 않는 것과, 아예 묻지 않는 것은 다르다. */
+  test('별표는 직방·다방 중 한 곳이라도 필수인 줄에만 붙는다', () {
+    final values = <String, dynamic>{
+      'trade': '월세',
+      'rooms': '1',
+      'parking': '주차 가능',
+      'appliances': ['에어컨'],
+      'floorPrivate': true,
+      'manageMethod': '정액 관리비',
+    };
+
+    // 두 폼 다 별이 없다 — 그래도 칸은 남아 있어야 한다.
+    for (final (key, why) in [
+      ('supplyArea', '다방 「공급면적(선택)」 · 직방엔 칸이 없다'),
+      ('loan', '직방 「융자금」 · 다방 「융자금 여부」 둘 다 별이 없다'),
+      ('loanAvailable', '직방 「매물 조건」 체크, 별이 없다'),
+      ('petAllowed', '직방 체크 · 다방 「방 특징(선택)」'),
+      ('heating', '다방 「난방 시설」, 별이 없다'),
+      ('airconType', '다방 「냉방 시설」, 별이 없다'),
+      (HifiField.householdCount, '직방 「총 세대 수」 · 다방 「세대(가구수)」'),
+      (HifiField.entranceType, '다방 「현관 유형」, 별이 없다'),
+      (HifiField.eContract, '직방 「매물 조건」 체크, 별이 없다'),
+      (HifiField.monthlyParkingFee, '두 폼 어디에도 칸이 없다'),
+      (HifiField.ownerName, '직방 「성함 또는 호칭」 — (선택사항)'),
+      ('ownerPhone', '직방 「전화번호」 — (선택사항) · 다방엔 칸이 없다'),
+    ]) {
+      expect(
+        fieldRequired(values, key),
+        isFalse,
+        reason: '$key 는 선택이어야 합니다 ($why).',
+      );
+      expect(
+        fieldVisible(values, key),
+        isTrue,
+        reason: '$key 칸은 그대로 남아 있어야 합니다 ($why).',
+      );
+    }
+
+    // 한 곳이라도 별을 단 줄.
+    for (final (key, why) in [
+      ('violation', '직방 「위반건축물 해당 여부*」'),
+      ('mediationMethod', '직방 「중개 의뢰를 받은 방법*」'),
+      ('unit', '직방 「호*」 (다방은 「호 입력(선택)」)'),
+      ('elevator', '직방 「엘리베이터 유무*」 · 다방 「엘리베이터*」'),
+      ('lh', '다방 「LH 전세임대 여부*」 (직방엔 칸이 없다)'),
+      (HifiField.duplex, '다방 「복층 여부*」'),
+      // 두 폼의 별표를 따르지 않는 하나 — 「층수 비공개」를 켜 놓고 비우면
+      // 다방에 넣을 표기가 없어 실제 층이 그대로 나간다.
+      (HifiField.floorBand, '층수 비공개를 켠 사람에게만 보이는 칸'),
+      ('buildingUse', '다방 「건축물용도*」'),
+      (HifiField.structure, '직방 「구조*」 · 다방 「방 정보*」'),
+      ('parkingCount', '직방 「총 주차대수*」'),
+      ('bathrooms', '직방 「화장실 수*」 · 다방 「욕실 수*」'),
+    ]) {
+      expect(
+        fieldRequired(values, key),
+        isTrue,
+        reason: '$key 는 필수여야 합니다 ($why).',
+      );
+    }
+  });
+
+  /* 다방이 유난히 오래 걸리던 까닭은 **기다림**이었다.
+   *
+   * 조작 하나마다 420ms 를 잤는데, 그 숫자는 미러의 깐깐이 층(이벤트를 삼켰다가
+   * 0.3초 뒤에 다시 쏘던 시험용 층)에서 나온 것이다. 미러는 걷었다. 실물 다방에서
+   * 재 보니 글자 칸 9~16ms · 라디오 10ms · 가장 무거운 select 167ms 였다
+   * (2026-09-22). 마흔 남짓한 조작에 곱해지면 10초 가까이가 기다림만으로 흘렀다. */
+  test('다방 어댑터는 실물이 가라앉는 만큼만 기다린다', () {
+    final dabang = dabangInjectionScript('{}');
+    expect(dabang, contains('const REACT = 200;'));
+    expect(dabang, isNot(contains('const REACT = 420;')));
+    // 기다림은 **값을 확인한 뒤**에 온다 — 짧아도 값을 잃지 않는다.
+    expect(dabang, contains('ok(); keep(); await sleep(REACT); return true;'));
+
+    // 직방은 이런 고정 기다림이 없다 — 느렸던 쪽은 다방이다.
+    expect(zigbangInjectionScript('{}'), isNot(contains('sleep(REACT)')));
+
+    // 당근은 재 보지 않았으므로 그대로 둔다.
+    expect(daangnInjectionScript('{}'), contains('const REACT = 420;'));
   });
 
   test('Kakao postcode bridge renders in-page instead of opening a window', () {
@@ -602,7 +822,7 @@ setTimeout(() => {
   // 되돌려 준다. 글자 그대로 견주면 넣고도 실패로 읽혔다.
   test('Dabang compares the approval date by digits and says what it read', () {
     final script = dabangInjectionScript(
-      '{"propertyType":"오픈형 원룸","approvalDate":"2025-03-01"}',
+      '{"propertyType":"빌라/연립/다세대","approvalDate":"2025-03-01"}',
     );
     expect(script, contains('const sameDigits = (got, wanted)'));
     expect(
@@ -614,39 +834,55 @@ setTimeout(() => {
       script,
       contains("data.approvalDate, v => String(v).replace(/-/g, ''), sameDigits)"),
     );
-    // 정의 한 번, 쓰는 곳 한 번 — 그게 전부여야 한다.
-    expect('sameDigits'.allMatches(script).length, 2);
+    // 입주 가능 일자도 같은 칸이다 — 폼이 제 형식으로 고쳐 되돌려 준다.
+    expect(
+      script,
+      contains("data.moveInDate, v => String(v).replace(/-/g, ''), sameDigits)"),
+    );
+    // 정의 한 번, 쓰는 곳은 날짜 칸 둘 — 그게 전부여야 한다.
+    expect('sameDigits'.allMatches(script).length, 3);
     // 어긋났을 때 폼이 **무엇으로 읽었는지**를 적는다. 이것이 없어 한 번 더 재야 했다.
     expect(script, contains('」인데 폼은 「'));
   });
 
-  test(
-    'Dabang executes complex selection without a building name and switches majors',
-    () {
-      for (final scenario in [
-        ('아파트', '오피스텔', false),
-        ('오피스텔 원룸형', '아파트', false),
-        ('아파트', '오피스텔', true),
-      ]) {
-        final targetLabel = scenario.$1.startsWith('오피스텔') ? '오피스텔' : '아파트';
-        final picker = dabangInjectionScript(
-          '{"propertyType":"${scenario.$1}","address":"서울특별시 강남구 테헤란로 123",'
-          '"roadAddress":"서울특별시 강남구 테헤란로 123",'
-          '"jibunAddress":"서울특별시 강남구 역삼동 123","noManagementFee":true}',
-        );
-        final temp = File(
-          '${Directory.systemTemp.path}/complex_picker_${DateTime.now().microsecondsSinceEpoch}.js',
-        );
-        try {
-          temp.writeAsStringSync('''
-let selectedMajor = '${scenario.$2}';
-let picked = false;
+  /* 오피스텔·아파트는 주소 대신 **단지**를 고른다(실물 2026-09-21).
+   *
+   * 대분류를 바꾸면 다방이 매물 정보 7행을 통째로 다시 그리므로 어댑터는 그것부터 하고,
+   * 시/도→시/군/구→동을 법정동 코드로 고른 뒤 단지명으로 단지를 확정한다. 단지명이
+   * 없으면 고를 수 없다 — 목록에는 이름만 있고 주소가 없어 견줄 것이 없기 때문이다.
+   * 그때는 **아무것도 누르지 않고** 사람에게 넘긴다. 이 세 갈래를 실제로 돌려 본다. */
+  test('Dabang picks the complex by name and switches the major first', () {
+    for (final scenario in [
+      // (통합 폼의 매물 종류, 폼에 이미 골라져 있는 대분류, 단지명)
+      ('아파트', '오피스텔', '역삼래미안'),
+      ('오피스텔', '아파트', '역삼아이파크'),
+      ('아파트', '오피스텔', ''),
+    ]) {
+      final (type, opened, complexName) = scenario;
+      final picker = dabangInjectionScript(
+        '{"propertyType":"$type","complexName":"$complexName",'
+        '"address":"서울특별시 강남구 테헤란로 123",'
+        '"legalDongCode":"1168010100","sido":"서울","sigungu":"강남구",'
+        '"bname":"역삼동","exclusiveArea":"59.94","supplyArea":"79.93"}',
+      );
+      final temp = File(
+        '${Directory.systemTemp.path}/complex_picker_${DateTime.now().microsecondsSinceEpoch}.js',
+      );
+      try {
+        temp.writeAsStringSync('''
+let major = '$opened';
+let pickedComplex = null;
 let report = null;
+
+// ── 다방 폼 흉내 ───────────────────────────────────────────────
+// 어댑터가 실제로 짚는 자리만 세운다: #room_info 의 (th, td) 쌍, 매물유형 행의 대분류
+// 단추와 소분류 label, 매물 주소 칸의 지역 선택 셋 · 단지검색 · 후보 목록 · 확정된 주소,
+// 매물 크기 칸의 평형 선택.
 class FakeControl {
-  constructor(tagName) { this.tagName = tagName; this._value = ''; this.disabled = false; }
+  constructor(tagName) { this.tagName = tagName; this._value = ''; this.disabled = false; this.checked = false; }
   get value() { return this._value; }
   set value(value) { this._value = String(value); }
-  focus() {} blur() {} dispatchEvent() { return true; }
+  focus() {} blur() {} closest() { return null; } dispatchEvent() { return true; }
 }
 global.HTMLSelectElement = class extends FakeControl {
   get value() { return this._value; } set value(value) { this._value = String(value); }
@@ -658,92 +894,148 @@ global.HTMLTextAreaElement = class extends FakeControl {
   get value() { return this._value; } set value(value) { this._value = String(value); }
 };
 global.Event = class { constructor(type) { this.type = type; } };
+global.FocusEvent = global.Event;
 global.PointerEvent = global.Event;
 global.MouseEvent = global.Event;
 global.MutationObserver = class { observe() {} };
+
+const node = (props) => Object.assign(
+  {tagName: 'DIV', textContent: '', querySelector: () => null, querySelectorAll: () => [],
+   getAttribute: () => null, closest: () => null, dispatchEvent: () => true},
+  props,
+);
 const option = (value, label) => ({value, textContent: label});
-const selects = [
-  Object.assign(new HTMLSelectElement('SELECT'), {options: [option('', '선택'), option('서울', '서울')]}),
-  Object.assign(new HTMLSelectElement('SELECT'), {options: [option('', '선택'), option('강남구', '강남구')]}),
-  Object.assign(new HTMLSelectElement('SELECT'), {options: [option('', '선택'), option('역삼동', '역삼동')]}),
-];
-const candidateButton = {dispatchEvent(event) { if (event.type === 'click') picked = true; }};
-const candidate = {
-  textContent: '건물명 없는 후보',
-  attributes: ${scenario.$3 ? '[]' : "[{name: 'data-road-address', value: '서울특별시 강남구 테헤란로 123'}]"},
-  getAttribute(name) { return ${scenario.$3 ? 'null' : "name === 'data-road-address' ? '서울특별시 강남구 테헤란로 123' : null"}; },
-  querySelector() { return candidateButton; },
-};
-const otherCandidate = {
-  textContent: '다른 건물명 없는 후보', attributes: [],
-  getAttribute() { return null; }, querySelector() { return candidateButton; },
-};
-const summary = {textContent: '도로명 서울특별시 강남구 테헤란로 123 지번 서울특별시 강남구 역삼동 123'};
-const cell = {
+const regionSelect = (...options) => Object.assign(
+  new HTMLSelectElement('SELECT'), {options: [option('', '선택'), ...options]},
+);
+const city = regionSelect(option('11', '서울특별시'));
+const gu = regionSelect(option('11680', '강남구'));
+const dong = regionSelect(option('11680101', '역삼동'));
+// 평형은 「공급 / 전용」이다. 전용 59.94 에 맞는 것 하나를 둔다.
+const space = regionSelect(
+  option('1', '24A (79.93㎡ / 59.94㎡)'), option('2', '32B (105.78㎡ / 84.96㎡)'),
+);
+const search = new HTMLInputElement('INPUT');
+const dongInput = new HTMLInputElement('INPUT');
+const hoInput = new HTMLInputElement('INPUT');
+
+// 단지 목록은 칸에 글자가 들어가야 뜬다 — 실물이 그렇다.
+const candidates = () => search.value
+  ? [node({textContent: '역삼래미안', dispatchEvent: (event) => {
+      if (event.type === 'click') pickedComplex = '역삼래미안';
+      return true;
+    }}),
+     node({textContent: '역삼아이파크', dispatchEvent: (event) => {
+      if (event.type === 'click') pickedComplex = '역삼아이파크';
+      return true;
+    }})]
+  : [];
+
+const addressTd = node({
   tagName: 'TD',
-  querySelectorAll(selector) {
-    if (selector === 'select') return selects;
-    if (selector === 'ul[class*=SearchList] > li') return ${scenario.$3 ? '[candidate, otherCandidate]' : '[candidate]'};
-    if (selector === '[class*=AddressList] li') return [];
-    if (selector === 'button') return [];
-    return [];
-  },
   querySelector(selector) {
-    if (selector === '[class*=AddressList]') return picked ? summary : null;
+    if (selector === 'select[name="city"]') return city;
+    if (selector === 'select[name="gu"]') return gu;
+    if (selector === 'select[name="dong"]') return dong;
+    if (selector === 'input[placeholder="단지검색"]') return search;
+    if (selector === 'input[name="dong"]') return dongInput;
+    if (selector === 'input[name="ho"]') return hoInput;
+    if (selector === '[class*=AddressList]') {
+      return pickedComplex ? node({textContent: '서울특별시 강남구 역삼동 ' + pickedComplex}) : null;
+    }
     return null;
   },
-};
-const th = {textContent: '매물 주소', nextElementSibling: cell};
-const root = {
   querySelectorAll(selector) {
-    if (selector === 'th') return [th];
-    if (selector === 'tr') return [];
+    if (selector === 'ul[class*=SearchList] > li') return candidates();
+    if (selector === '[class*=AddressList] li') {
+      return pickedComplex ? [node({textContent: pickedComplex})] : [];
+    }
     return [];
   },
-};
-const majorButton = label => ({
-  textContent: label,
-  className: '',
-  getAttribute(name) { return name === 'aria-pressed' ? String(selectedMajor === label) : null; },
-  querySelector() { return null; },
-  dispatchEvent(event) { if (event.type === 'click') selectedMajor = label; },
 });
-const majorButtons = [majorButton('주택'), majorButton('오피스텔'), majorButton('아파트')];
+const sizeTd = node({
+  tagName: 'TD',
+  querySelector: (selector) => selector === 'select[name="complexSpaceSeq"]' ? space : null,
+});
+// 소분류 label 이 지금 골라진 대분류를 말해 준다 — 대분류 단추에는 표식이 없다.
+const minors = () => major === '주택'
+  ? ['빌라/연립/다세대', '단독주택', '다가구주택', '상가주택']
+  : [major];
+const majorTd = node({
+  tagName: 'TD',
+  querySelectorAll: (selector) => selector === 'label'
+    ? minors().map(name => node({textContent: name,
+        querySelector: () => new HTMLInputElement('INPUT')}))
+    : [],
+});
+const majorButtons = ['주택', '오피스텔', '아파트'].map(label => node({
+  tagName: 'BUTTON', textContent: label,
+  dispatchEvent: (event) => { if (event.type === 'click') major = label; return true; },
+}));
+const row = (label, cell) => {
+  const th = node({tagName: 'TH', textContent: label, nextElementSibling: cell,
+                   querySelector: (s) => s === 'th h1' ? null : null});
+  const tr = node({
+    tagName: 'TR',
+    querySelector: (selector) => selector === 'th h1' ? node({textContent: label}) : null,
+    querySelectorAll: (selector) => selector === 'button'
+      ? (label === '매물유형' ? majorButtons : [])
+      : selector === 'label' ? (label === '매물유형' ? majorTd.querySelectorAll('label') : []) : [],
+  });
+  return {th, tr};
+};
+const rows = [row('매물유형', majorTd), row('매물 주소', addressTd), row('매물 크기', sizeTd)];
+const root = node({
+  querySelectorAll: (selector) => selector === 'th' ? rows.map(r => r.th)
+    : selector === 'tr' ? rows.map(r => r.tr) : [],
+});
 global.window = global;
 global.document = {
-  body: {},
-  getElementById(id) { return id === 'room_info' ? root : null; },
-  querySelector(selector) { return selector === '#room_info input[name="buildingType"]' ? null : null; },
-  querySelectorAll(selector) { return selector === 'button' ? majorButtons : []; },
+  body: node({}),
+  getElementById: (id) => id === 'room_info' ? root : null,
+  querySelector: () => null,
+  querySelectorAll: () => [],
 };
 global.ListingResult = {postMessage(value) {
   report = JSON.parse(value);
-  const addressMissing = report.missing.some(item => item.startsWith('address:'));
-  const correct = ${scenario.$3 ? '!picked && addressMissing' : 'picked && !addressMissing'};
-  if (selectedMajor !== '$targetLabel' || !correct) {
-    console.error(JSON.stringify({selectedMajor, picked, report}));
-    process.exit(1);
-  }
+  console.log(JSON.stringify({major, pickedComplex,
+    missing: report.missing, unsupported: report.unsupported}));
   process.exit(0);
 }};
 $picker
 setTimeout(() => {
-  console.error(JSON.stringify({failure: 'timeout', selectedMajor, picked, report}));
+  console.error(JSON.stringify({failure: 'timeout', major, pickedComplex, report}));
   process.exit(1);
-}, 10000);
+}, 90000);
 ''');
-          final result = Process.runSync('node', [temp.path]);
+        final result = Process.runSync('node', [temp.path]);
+        final why = '$type: ${result.stdout}\n${result.stderr}';
+        expect(result.exitCode, 0, reason: why);
+        final seen = jsonDecode(result.stdout.toString().trim()) as Map;
+        // 대분류는 통합 폼의 매물 종류대로 바뀌어 있어야 한다.
+        expect(seen['major'], type, reason: why);
+        final missing = (seen['missing'] as List).cast<String>();
+        if (complexName.isEmpty) {
+          // 단지명이 없으면 아무 단지도 누르지 않고, 왜 못 골랐는지 적어 올린다.
+          expect(seen['pickedComplex'], isNull, reason: why);
           expect(
-            result.exitCode,
-            0,
-            reason: '${scenario.$1}: ${result.stdout}\n${result.stderr}',
+            missing.where((line) => line.startsWith('address:')),
+            contains(contains('단지명이 없어')),
+            reason: why,
           );
-        } finally {
-          if (temp.existsSync()) temp.deleteSync();
+        } else {
+          expect(seen['pickedComplex'], complexName, reason: why);
+          expect(
+            missing.where((line) => line.startsWith('address:')),
+            isEmpty,
+            reason: why,
+          );
         }
+      } finally {
+        if (temp.existsSync()) temp.deleteSync();
       }
-    },
-  );
+    }
+  });
 
   test('generated adapters are valid JavaScript', () {
     final scripts = {
@@ -756,6 +1048,22 @@ setTimeout(() => {
       'dabangPhotoBridge': listingPhotoBridgeScript(PhotoTarget.dabang),
       'daangnPhotoBridge': listingPhotoBridgeScript(PhotoTarget.daangn),
       'photoCommand': listingPhotoCommand('append', ['aGVsbG8=']),
+      // 목록 위에서 도는 셋도 같은 자리에서 지킨다 — 여기 문법이 깨지면 번호도
+      // 못 읽고 카드도 못 짚는데, 그 실패는 화면에서 「못 찾았어요」로만 보인다.
+      'listingNumber': listingNumberScript(ListingPlatform.zigbang, const {
+        'title': '볕 잘드는 원룸',
+        'address': '경북 포항시 남구 대도동 168-7',
+        'unit': '202',
+        'trade': '월세',
+        'deposit': '200',
+        'monthlyRent': '20',
+      }),
+      'takedownCard': takedownCardScript(ListingPlatform.zigbang, '50144198'),
+      'pressWatcher': pressWatcherScript(
+        ListingPlatform.zigbang.takedownLabels,
+        within: takedownCardSelector,
+        confirmLabels: ListingPlatform.zigbang.takedownConfirmLabels,
+      ),
     };
     scripts.forEach((name, source) {
       final temp = File(

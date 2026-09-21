@@ -79,9 +79,18 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
     ...widget.listing.channelDates,
   };
 
+  /// 플랫폼이 붙여 준 매물 번호. 등록이 끝난 플랫폼마다 광고 목록을 한 번 읽어 채운다.
+  late final Map<ListingPlatform, String> _numbers = {
+    ...widget.listing.channelNumbers,
+  };
+
   final _sessions = <ListingPlatform, MirrorSession>{};
   final _builtPages = <ListingPlatform, Widget>{};
   final _listingPages = <ListingPlatform, MirrorPage>{};
+
+  /// 번호를 읽는 동안만 살아 있는 광고 목록 페이지. 화면에는 올라오지 않는다 —
+  /// 등록 흐름은 하던 대로 흘러가고, 이것은 그 뒤에서 조용히 한 번 읽고 사라진다.
+  final _numberProbes = <ListingPlatform, MirrorListings>{};
 
   /// Platforms whose session already lifted itself once.
   final _autoLifted = <MirrorSession>{};
@@ -108,6 +117,9 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
     }
     for (final page in _listingPages.values) {
       page.dispose();
+    }
+    for (final probe in _numberProbes.values) {
+      probe.dispose();
     }
     super.dispose();
   }
@@ -139,11 +151,12 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
       setState(() {});
       return;
     }
-    _sessions[platform] = MirrorSession(
+    final session = _sessions[platform] = MirrorSession(
       platform: platform,
       values: widget.values,
       photos: widget.photos,
     )..addListener(() => _onSession(platform));
+    attachPlatformDialogs(session, () => context);
     _persist();
   }
 
@@ -170,7 +183,39 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
       if (_shown == platform) _front = _Front.hub;
     });
     _persist();
+    _readNumber(platform);
     if (platform == _active) _next();
+  }
+
+  /// 등록이 끝난 플랫폼의 광고 목록을 한 번 읽어 매물 번호를 적어 둔다.
+  ///
+  /// **등록 흐름은 이것을 기다리지 않는다.** 읽히면 적고, 못 읽으면 그대로 둔다 —
+  /// 내릴 때 한 번 더 읽을 자리가 있다([TakedownFlowPage]). 빗장이 걸려 있으면
+  /// 광고 목록을 아예 열지 않는다: 남의 계정으로 재 보는 동안 실물 광고 목록에
+  /// 들어가지 않는다는 약속이 그 빗장이다([guardLiveAds]).
+  void _readNumber(ListingPlatform platform) {
+    if (widget.guarded || widget.remotePageBuilder != null) return;
+    if (_numbers.containsKey(platform) || _numberProbes.containsKey(platform)) {
+      return;
+    }
+    final probe = MirrorListings(platform: platform, values: widget.values);
+    _numberProbes[platform] = probe;
+    probe.addListener(() => _onNumber(platform));
+    setState(() {});
+  }
+
+  void _onNumber(ListingPlatform platform) {
+    final probe = _numberProbes[platform];
+    if (probe == null || !mounted) return;
+    if (!probe.numberSettled && probe.failure == null) return;
+    final number = probe.number;
+    _numberProbes.remove(platform);
+    // 제 listener 안에서 제 자신을 버리지 않는다 — 알리는 중에 듣는 이를 지우는 일이다.
+    Future.microtask(probe.dispose);
+    setState(() {
+      if (number != null) _numbers[platform] = number;
+    });
+    if (number != null) _persist();
   }
 
   void _failed(ListingPlatform platform) {
@@ -192,14 +237,17 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
   void _showListings(ListingPlatform platform) {
     // 빗장이 걸려 있으면 버튼도 없지만, 여기로 오는 다른 길이 생기더라도 닫혀 있게 둔다.
     if (widget.guarded) return;
-    _listingPages.putIfAbsent(
-      platform,
-      () =>
-          MirrorPage(platform: platform, url: Uri.parse(platform.listingsUrl))
-            ..addListener(() {
-              if (mounted) setState(() {});
-            }),
-    );
+    _listingPages.putIfAbsent(platform, () {
+      final page =
+          MirrorPage(
+            platform: platform,
+            url: Uri.parse(platform.listingsUrlFor(widget.values)),
+          )..addListener(() {
+            if (mounted) setState(() {});
+          });
+      attachPlatformDialogs(page, () => context);
+      return page;
+    });
     setState(() {
       _shown = platform;
       _front = _Front.listings;
@@ -250,6 +298,7 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
                 : entry.value,
         },
         channelDates: Map.of(_dates),
+        channelNumbers: Map.of(_numbers),
       ),
     );
   }
@@ -443,6 +492,11 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
     // Every page stays mounted — a WebView taken out of the window is
     // throttled — and the one in front is painted last.
     final pages = <(Object, Widget)>[
+      // 맨 아래. 번호를 읽는 페이지도 **창 안에** 있어야 한다 — 창 밖으로 나간
+      // WebView 는 플랫폼이 스로틀해 스크립트가 제때 돌지 않는다. 사람에게 보여 줄
+      // 것은 아니므로 늘 다른 페이지 밑에 깔아 두고, 앞으로 올리지 않는다.
+      for (final entry in _numberProbes.entries)
+        (entry.value, MirrorWebView(entry.value)),
       for (final entry in _builtPages.entries)
         (('built', entry.key), entry.value),
       for (final entry in _sessions.entries)

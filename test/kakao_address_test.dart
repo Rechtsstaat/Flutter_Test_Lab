@@ -12,7 +12,12 @@ void main() {
       'jibunAddress': '서울 강남구 역삼동 737',
       'bcode': '1168010100',
       'buildingName': '강남파이낸스센터',
+      'sido': '서울',
+      'sigungu': '강남구',
+      'bname': '역삼동',
     });
+    // 시/도·시/군/구·동은 다방의 단지 검색이 쓴다 — 법정동 코드가 없거나 선택지의
+    // 코드가 어긋날 때 이름으로 고르는 길이다.
     expect(address.toFormValues(), {
       'address': '서울 강남구 테헤란로 152',
       'roadAddress': '서울 강남구 테헤란로 152',
@@ -20,6 +25,9 @@ void main() {
       'postalCode': '06236',
       'legalDongCode': '1168010100',
       'buildingName': '강남파이낸스센터',
+      'sido': '서울',
+      'sigungu': '강남구',
+      'bname': '역삼동',
     });
   });
 

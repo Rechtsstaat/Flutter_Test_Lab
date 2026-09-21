@@ -263,6 +263,7 @@ class _AdStateCard extends StatelessWidget {
           platform: platform,
           state: listing.channels[platform] ?? ChannelState.pending,
           date: listing.channelDates[platform],
+          number: listing.channelNumbers[platform],
         ),
     ],
   );
@@ -273,11 +274,16 @@ class _AdStateRow extends StatelessWidget {
     required this.platform,
     required this.state,
     required this.date,
+    this.number,
   });
 
   final ListingPlatform platform;
   final ChannelState state;
   final DateTime? date;
+
+  /// 플랫폼이 붙여 준 매물 번호. 광고를 내릴 때 목록에서 이 매물을 짚는 데 쓰는
+  /// 바로 그 번호라, 여기 적어 두면 사람이 제 눈으로 맞는지 볼 수 있다.
+  final String? number;
 
   @override
   Widget build(BuildContext context) {
@@ -287,6 +293,10 @@ class _AdStateRow extends StatelessWidget {
       ChannelState.removed when date != null => '종료일 ${formatDate(date!)}',
       _ => null,
     };
+    final lines = [
+      ?dateLabel,
+      if (number != null) '${platform.listingNumberLabel} $number',
+    ];
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: Space.s12),
       child: Row(
@@ -296,7 +306,8 @@ class _AdStateRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(platform.label, style: AppText.bodyStrong),
-                if (dateLabel != null) Text(dateLabel, style: AppText.caption),
+                if (lines.isNotEmpty)
+                  Text(lines.join(' · '), style: AppText.caption),
               ],
             ),
           ),

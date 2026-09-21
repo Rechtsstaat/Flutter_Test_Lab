@@ -15,6 +15,10 @@ class KakaoAddress {
     required this.postalCode,
     this.legalDongCode,
     this.buildingName,
+    this.sido = '',
+    this.sigungu = '',
+    this.bname = '',
+    this.apartment = false,
     this.userSelectedJibun = false,
   });
 
@@ -33,6 +37,10 @@ class KakaoAddress {
       postalCode: pick('zonecode'),
       legalDongCode: bcode.isEmpty ? null : bcode,
       buildingName: building.isEmpty ? null : building,
+      sido: pick('sido'),
+      sigungu: pick('sigungu'),
+      bname: pick('bname'),
+      apartment: pick('apartment') == 'Y',
       userSelectedJibun: pick('userSelectedType') == 'J',
     );
   }
@@ -42,6 +50,16 @@ class KakaoAddress {
   final String postalCode;
   final String? legalDongCode;
   final String? buildingName;
+
+  /// 시·도 / 시·군·구 / 법정동 — 다방은 오피스텔·아파트를 주소가 아니라 이 세 단계를
+  /// 골라 찾은 단지 목록에서 받는다. 법정동 코드([legalDongCode])로 먼저 고르고, 코드가
+  /// 맞지 않을 때 이 이름으로 고른다.
+  final String sido;
+  final String sigungu;
+  final String bname;
+
+  /// 카카오가 공동주택(아파트)으로 아는 건물인가.
+  final bool apartment;
   final bool userSelectedJibun;
 
   /// The address line the user actually tapped (road or jibun).
@@ -58,6 +76,9 @@ class KakaoAddress {
     'postalCode': postalCode.isEmpty ? null : postalCode,
     'legalDongCode': legalDongCode,
     'buildingName': buildingName,
+    'sido': sido.isEmpty ? null : sido,
+    'sigungu': sigungu.isEmpty ? null : sigungu,
+    'bname': bname.isEmpty ? null : bname,
   };
 }
 
