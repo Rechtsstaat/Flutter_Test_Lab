@@ -45,9 +45,11 @@ String listingNumberScript(ListingPlatform platform, Map<String, dynamic> hints)
   const config = ${jsonEncode({
       'labels': platform.takedownLabels,
       'hints': _hintsOf(hints),
+      'lazy': platform.listingsLoadLazily,
     })};
 $_cardsChunk
 $_scoreChunk
+$_scrollChunk
   const answer = () => {
     const cards = readCards();
     const scored = score(cards);
@@ -66,11 +68,27 @@ $_scoreChunk
   };
   // 실물 목록은 페이지가 끝난 뒤에 그려진다(직방 Next.js, 다방 SPA). 카드가 한 장도
   // 없으면 아직 안 그려진 것이지 없는 것이 아니다 — 잠깐씩 다시 본다.
+  //
+  // 그리고 **보이는 것이 전부가 아니다.** 직방은 스무 장만 그려 두므로, 고르지
+  // 못했으면 더 실어 놓고 다시 본다. 방금 올린 매물이 스무 번째 뒤에 있으면 한 번
+  // 훑고 마는 눈에는 영영 안 보인다 — 그것이 번호를 못 읽던 까닭이다.
   let tries = 0;
+  let mostCards = 0;
+  let quiet = 0;
   const tick = () => {
     const result = answer();
-    if (result.number || result.cards > 0 || ++tries >= 40) {
-      try { window.ListingNumber.postMessage(JSON.stringify({...result, tries})); } catch (_) {}
+    const grew = result.cards > mostCards;
+    mostCards = Math.max(mostCards, result.cards);
+    quiet = grew ? 0 : quiet + 1;
+    if (!result.number) loadMore();
+    // **카드가 더 늘지 않는 것**만이 다 실렸다는 신호다. 스크롤이 움직였는지로
+    // 재면, 이미 바닥에 붙어 있던 순간을 「끝」으로 잘못 읽는다.
+    const done = result.number || (result.cards > 0 && quiet >= 5) || ++tries >= 60;
+    if (done) {
+      try {
+        window.ListingNumber.postMessage(
+          JSON.stringify({...result, tries, scanned: mostCards}));
+      } catch (_) {}
       return;
     }
     setTimeout(tick, 500);
@@ -94,6 +112,7 @@ String takedownCardScript(ListingPlatform platform, String number) =>
       'labels': platform.takedownLabels,
       'searchHints': _searchHints,
       'mark': takedownCardMark,
+      'lazy': platform.listingsLoadLazily,
     })};
   const norm = value => String(value || '').replace(/\\s+/g, ' ').trim();
   // 50144198 이 501441980 이나 금액의 일부와 같은 것으로 읽히면 안 된다.
@@ -123,6 +142,7 @@ String takedownCardScript(ListingPlatform platform, String number) =>
     return null;
   };
 
+$_scrollChunk
   const styleId = 'flr-takedown-card-style';
   const ensureStyle = () => {
     if (document.getElementById(styleId)) return;
@@ -205,7 +225,12 @@ String takedownCardScript(ListingPlatform platform, String number) =>
   const apply = () => {
     const card = locate();
     if (!card) {
+      // 번호를 아는 자리다. 검색창이 목록을 한 장으로 줄여 주는 것이 가장 빠르고
+      // (실물 2026-09-22: 직방은 정말 한 장으로 줄어든다), 그것이 듣지 않는
+      // 목록에서는 더 실어 가며 찾는다. 포기한 뒤에는 밀지 않는다 — 그때부터는
+      // 사람이 제 손으로 목록을 보는 중이다.
       search();
+      if (!state.gaveUp) loadMore();
       if (!state.gaveUp && Date.now() - state.since > giveUpAfter) {
         state.gaveUp = true;
       }
@@ -244,6 +269,44 @@ String takedownCardScript(ListingPlatform platform, String number) =>
   state.timer = setInterval(apply, 700);
   return apply();
 })();
+''';
+
+/// 목록을 더 싣는 토막 — 두 스크립트가 같은 손으로 목록을 민다.
+///
+/// 직방은 광고 중 44건 가운데 **스무 장만** 그려 둔다. 그런데 스크롤되는 것은 문서가
+/// 아니라 목록 제 안쪽 상자라(`div.overflow-y-auto`, 실물 2026-09-22) `window.scrollTo`
+/// 로는 한 장도 더 실리지 않는다. 카드에서 위로 올라가며 **정말 스크롤되는 상자**를
+/// 찾아 그것을 내린다. 못 찾으면 문서를 내린다 — 그것으로 되는 목록도 있다.
+const _scrollChunk = r'''
+  const scrollerOf = node => {
+    for (let el = node; el && el !== document.body; el = el.parentElement) {
+      const how = getComputedStyle(el).overflowY;
+      if ((how === 'auto' || how === 'scroll') && el.scrollHeight > el.clientHeight + 40) {
+        return el;
+      }
+    }
+    return document.scrollingElement || document.documentElement;
+  };
+  /// 한 번 더 싣기를 청한다.
+  ///
+  /// 무한 스크롤은 **바닥에 닿는 순간**에 다음 장을 싣는다. 이미 바닥에 붙어 있으면
+  /// 그 순간이 다시 오지 않으므로, 살짝 떼었다 다시 붙인다. 이것 없이는 스무 장에서
+  /// 마흔 장까지만 가고 나머지를 못 싣는다(실물 2026-09-22: 광고 중 44건).
+  const loadMore = () => {
+    if (!config.lazy) return false;
+    const button = [...document.querySelectorAll('button, a, [role="button"]')]
+      .find(isTakedown);
+    if (!button) return false;
+    const box = scrollerOf(button);
+    if (!box) return false;
+    const was = box.scrollTop;
+    box.scrollTop = box.scrollHeight;
+    if (box.scrollTop === was) {
+      box.scrollTop = Math.max(0, was - 240);
+      box.scrollTop = box.scrollHeight;
+    }
+    return true;
+  };
 ''';
 
 /// 카드를 읽어 오는 토막 — 두 스크립트가 같은 눈으로 목록을 본다.

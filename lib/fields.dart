@@ -175,9 +175,17 @@ extension ListingPlatformConfig on ListingPlatform {
       officetelForm: 'https://ceo.zigbang.com/ads/officetel/ad-item/new',
       dashboard: 'https://ceo.zigbang.com/dashboard',
       login: 'https://ceo.zigbang.com/account/login/email',
-      listings: 'https://ceo.zigbang.com/ads/oneroom?status=open',
-      villaListings: 'https://ceo.zigbang.com/ads/villa?status=open',
-      officetelListings: 'https://ceo.zigbang.com/ads/officetel?status=open',
+      // `status=all` 이어야 한다. 방금 등록한 광고는 **아직 「광고 중」이 아니다** —
+      // 직방의 매물 상태는 ready·open·close·reject 넷이고(실물 번들 2026-09-22,
+      // `CeoItemSummary.status`), 갓 올린 것은 `ready` 다. `status=open` 은 그것을
+      // 한 장도 보여 주지 않아, 「등록된 광고 보기」로 열어도 제 매물이 없고 번호도
+      // 읽히지 않았다. 전체 목록은 최신순이라 방금 올린 것이 맨 앞에 온다.
+      //
+      // 내릴 때도 전체가 맞다. 카드의 「매물 종료하기」는 `ready` 에도 붙어 있어
+      // (`status === OPEN || status === READY`), 검수 전 광고도 내릴 수 있다.
+      listings: 'https://ceo.zigbang.com/ads/oneroom?status=all',
+      villaListings: 'https://ceo.zigbang.com/ads/villa?status=all',
+      officetelListings: 'https://ceo.zigbang.com/ads/officetel?status=all',
       signedOutPaths: ['/intro', '/account/login', '/error/401'],
       signedOutHosts: ['account.zigbang.com'],
     ),
@@ -292,10 +300,40 @@ extension ListingPlatformConfig on ListingPlatform {
 
   /// The platform's own "take this listing down" buttons on [listingsUrl].
   /// The 당근 mirror has not captured one yet.
+  ///
+  /// 직방의 「매물 종료」는 **단추가 아니라 모달의 제목**이었다(실물 2026-09-22).
+  /// 그 글자를 여기 두면 카드를 찾을 때 모달의 제목을 종료 단추로 잘못 센다.
   List<String> get takedownLabels => switch (this) {
-    ListingPlatform.zigbang => const ['매물 종료하기', '매물 종료'],
+    ListingPlatform.zigbang => const ['매물 종료하기'],
     ListingPlatform.dabang => const ['광고 종료', '거래 완료'],
     ListingPlatform.daangn => const ['거래완료', '미노출'],
+  };
+
+  /// [takedownLabels] 를 눌러도 **아직 내려가지 않는** 플랫폼의 마지막 확인 단추.
+  ///
+  /// 직방 카드의 「매물 종료하기」는 상태 하나를 세울 뿐이고(`onClick: () => T(!0)`),
+  /// 실제로 내리는 것은 그때 열리는 모달 「매물 종료 — 매물 거래를 종료하시겠습니까?」
+  /// 의 **「네, 종료합니다」**다. 그 단추만이 `status: CLOSE` 를 보낸다 (실물 번들
+  /// 확인 2026-09-22, `ceo.zigbang.com` 의 `AdItemCardBtn`).
+  ///
+  /// 그래서 첫 누름을 종료로 세면 **광고는 그대로 남은 채** 한방만 내렸다고 적는다.
+  /// 비어 있으면 첫 누름이 곧 종료다 — 다방은 제 확인 창을 네이티브 `confirm` 으로
+  /// 띄우고 사람이 거기에 답한다([attachPlatformDialogs]).
+  List<String> get takedownConfirmLabels => switch (this) {
+    ListingPlatform.zigbang => const ['네, 종료합니다'],
+    ListingPlatform.dabang => const [],
+    ListingPlatform.daangn => const [],
+  };
+
+  /// 광고 목록이 **한 번에 다 그려지지 않는가.**
+  ///
+  /// 직방은 광고 중 44건 가운데 스무 장만 그려 두고, 문서가 아니라 **제 안쪽 상자**
+  /// (`div.overflow-y-auto`)를 바닥까지 내려야 다음 스무 장을 싣는다(실물 2026-09-22).
+  /// 한 번 훑고 마는 스크립트는 나머지를 영영 보지 못한다.
+  bool get listingsLoadLazily => switch (this) {
+    ListingPlatform.zigbang => true,
+    ListingPlatform.dabang => false,
+    ListingPlatform.daangn => false,
   };
 
   /// 지금 쓸 수 있는가. **여기가 유일한 스위치다.**

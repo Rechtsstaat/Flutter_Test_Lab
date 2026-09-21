@@ -135,7 +135,7 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
     if (page.cardFound) {
       return (
         '$what 매물을 찾았어요',
-        '파란 테두리 카드의 「${platform.takedownLabels.first}」를 눌러주세요',
+        _press(platform),
       );
     }
     if (page.gaveUp) {
@@ -144,6 +144,19 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
       return ('목록에서 이 매물을 찾지 못했어요', '$what 매물을 직접 찾아 종료해주세요');
     }
     return ('$what 매물을 찾는 중이에요', '잠시만 기다려주세요');
+  }
+
+  /// 무엇을 눌러야 정말 내려가는가.
+  ///
+  /// 직방은 카드의 「매물 종료하기」가 모달을 열 뿐이고, 광고를 내리는 것은 그 모달의
+  /// 「네, 종료합니다」다([ListingPlatform.takedownConfirmLabels]). 첫 누름에서 손을
+  /// 떼면 광고는 그대로 남는다 — 그러니 두 걸음을 **처음부터 함께** 말해 준다.
+  String _press(ListingPlatform platform) {
+    final first = '파란 테두리 카드의 「${platform.takedownLabels.first}」';
+    final confirm = platform.takedownConfirmLabels.firstOrNull;
+    return confirm == null
+        ? '$first를 눌러주세요'
+        : '$first를 누른 뒤, 창의 「$confirm」까지 눌러주세요';
   }
 
   Future<void> _advance() async {

@@ -164,6 +164,129 @@ void main() {
     });
   });
 
+  /* 직방의 종료는 **두 걸음**이다 (실물 번들 2026-09-22, `AdItemCardBtn`):
+   *
+   *   <Button onClick={() => T(!0)}>매물 종료하기</Button>
+   *   <Dialog title="매물 종료" description="매물 거래를 종료하시겠습니까?"
+   *     actions={<><Button onClick={() => T(!1)}>아니오</Button>
+   *               <Button onClick={A}>네, 종료합니다</Button></>} />
+   *
+   * 첫 단추는 상태 하나를 세울 뿐이고, `status: CLOSE` 를 보내는 것은 `A` — 곧
+   * 「네, 종료합니다」뿐이다. 첫 누름을 종료로 세면 **광고는 그대로 남은 채** 한방만
+   * 내렸다고 적는다. 사람이 겪은 것이 정확히 그것이었다. */
+  group('두 걸음짜리 종료 — 직방', () {
+    test('카드의 단추는 겨누기만 하고, 확인 단추에서 비로소 알린다', () {
+      final script = pressWatcherScript(
+        ListingPlatform.zigbang.takedownLabels,
+        within: takedownCardSelector,
+        confirmLabels: ListingPlatform.zigbang.takedownConfirmLabels,
+      );
+      expect(script, contains('"네, 종료합니다"'));
+      expect(script, contains('watch.armed = {label, at: Date.now()};'));
+      expect(script, contains('if (armed && Date.now() - armed.at < armFor) tell(armed.label);'));
+    });
+
+    test('확인 단추는 울타리 밖(모달)이어도 센다', () {
+      final script = pressWatcherScript(
+        ListingPlatform.zigbang.takedownLabels,
+        within: takedownCardSelector,
+        confirmLabels: ListingPlatform.zigbang.takedownConfirmLabels,
+      );
+      // 확인 단추를 보는 자리가 울타리를 보는 자리보다 **앞**이어야 한다.
+      expect(
+        script.indexOf('watch.confirmLabels.includes(label)'),
+        lessThan(script.indexOf('el.closest(watch.within)')),
+      );
+    });
+
+    test('겨눠 둔 채 딴 것을 누르면(「아니오」) 없던 일이 된다', () {
+      final script = pressWatcherScript(
+        ListingPlatform.zigbang.takedownLabels,
+        within: takedownCardSelector,
+        confirmLabels: ListingPlatform.zigbang.takedownConfirmLabels,
+      );
+      expect(script, contains('if (!takedown) {\n      watch.armed = null;'));
+    });
+
+    test('확인 단추가 없는 플랫폼은 예전 그대로 — 첫 누름이 곧 종료다', () {
+      expect(ListingPlatform.dabang.takedownConfirmLabels, isEmpty);
+      final script = pressWatcherScript(
+        ListingPlatform.dabang.takedownLabels,
+        within: takedownCardSelector,
+        confirmLabels: ListingPlatform.dabang.takedownConfirmLabels,
+      );
+      expect(script, contains('const confirmLabels = [];'));
+      expect(script, contains('if (!watch.confirmLabels.length) {'));
+    });
+
+    test('「매물 종료」는 단추가 아니라 모달의 제목이라 카드를 찾을 때 세지 않는다', () {
+      expect(ListingPlatform.zigbang.takedownLabels, ['매물 종료하기']);
+    });
+  });
+
+  /* 목록이 한 번에 다 그려지지 않는다 (실물 2026-09-22).
+   *
+   * 직방은 광고 중 44건 가운데 스무 장만 그려 두고, **문서가 아니라 제 안쪽 상자**
+   * (`div.overflow-y-auto`)를 바닥까지 내려야 다음 스무 장을 싣는다. 한 번 훑고
+   * 마는 눈에는 나머지가 영영 안 보인다. */
+  group('목록을 더 실어 가며 본다 — 직방', () {
+    test('직방만 더 싣는다', () {
+      expect(ListingPlatform.zigbang.listingsLoadLazily, isTrue);
+      expect(ListingPlatform.dabang.listingsLoadLazily, isFalse);
+    });
+
+    test('번호를 읽는 스크립트는 더 실어 놓고 다시 본다', () {
+      final script = listingNumberScript(ListingPlatform.zigbang, _values);
+      expect(script, contains('"lazy":true'));
+      expect(script, contains('if (!result.number) loadMore();'));
+      // 스크롤이 움직였는지가 아니라 **카드가 늘었는지**로 끝을 판단한다.
+      expect(script, contains('quiet >= 5'));
+      // 문서가 아니라 정말 스크롤되는 상자를 민다.
+      expect(script, contains("how === 'auto' || how === 'scroll'"));
+    });
+
+    test('이미 바닥에 붙어 있으면 떼었다 다시 붙인다', () {
+      final script = listingNumberScript(ListingPlatform.zigbang, _values);
+      expect(script, contains('box.scrollTop = Math.max(0, was - 240);'));
+    });
+
+    test('다방 목록은 밀지 않는다 — 지금 잘 되는 쪽은 건드리지 않는다', () {
+      final script = listingNumberScript(ListingPlatform.dabang, _values);
+      expect(script, contains('"lazy":false'));
+      expect(script, contains('if (!config.lazy) return false;'));
+    });
+
+    test('카드를 찾는 스크립트는 검색 먼저, 그다음 더 싣기', () {
+      final script = takedownCardScript(ListingPlatform.zigbang, '50144198');
+      expect(script, contains('"lazy":true'));
+      expect(
+        script.indexOf('search();'),
+        lessThan(script.indexOf('if (!state.gaveUp) loadMore();')),
+      );
+    });
+
+    test('포기한 뒤에는 밀지 않는다 — 그때부터는 사람이 보는 중이다', () {
+      final script = takedownCardScript(ListingPlatform.zigbang, '50144198');
+      expect(script, contains('if (!state.gaveUp) loadMore();'));
+    });
+  });
+
+  /* 방금 올린 광고는 아직 「광고 중」이 아니다 — 직방의 상태는 ready·open·close·
+   * reject 넷이고(실물 번들 2026-09-22 `CeoItemSummary.status`), 갓 올린 것은
+   * `ready` 라 `status=open` 목록에는 한 장도 없다. 「등록된 광고 보기」로 열어도
+   * 제 매물이 없고, 번호도 그래서 읽히지 않았다. */
+  group('방금 올린 광고가 보이는 목록으로 간다 — 직방', () {
+    test('세 폼의 목록이 모두 전체 목록이다', () {
+      for (final url in [
+        ListingPlatform.zigbang.listingsUrl,
+        ListingPlatform.zigbang.listingsUrlFor(const {'propertyType': '빌라/연립/다세대'}),
+        ListingPlatform.zigbang.listingsUrlFor(const {'propertyType': '오피스텔'}),
+      ]) {
+        expect(url, contains('status=all'), reason: '$url 이 전체 목록이 아닙니다.');
+      }
+    });
+  });
+
   group('뒤늦게 읽어 낸 번호도 적어 둔다', () {
     late Directory directory;
     late AppStore store;

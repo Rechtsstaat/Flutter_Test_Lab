@@ -37,6 +37,7 @@ class MirrorPage extends ChangeNotifier {
     required this.platform,
     required Uri url,
     this.watchLabels = const [],
+    this.confirmLabels = const [],
     this.loadTimeout,
   }) : initialUrl = url {
     controller = WebViewController()
@@ -100,6 +101,11 @@ class MirrorPage extends ChangeNotifier {
   final ListingPlatform platform;
   final Uri initialUrl;
   final List<String> watchLabels;
+
+  /// [watchLabels] 를 누른 **뒤에** 플랫폼이 한 번 더 묻는 자리의 확인 단추
+  /// ([ListingPlatform.takedownConfirmLabels]). 비어 있으면 첫 누름이 곧 그 일이다.
+  final List<String> confirmLabels;
+
   final Duration? loadTimeout;
   late final WebViewController controller;
   Timer? _timeout;
@@ -179,7 +185,11 @@ class MirrorPage extends ChangeNotifier {
     if (watchLabels.isEmpty || _disposed) return;
     try {
       await controller.runJavaScript(
-        pressWatcherScript(watchLabels, within: pressScope),
+        pressWatcherScript(
+          watchLabels,
+          within: pressScope,
+          confirmLabels: confirmLabels,
+        ),
       );
     } catch (_) {
       // A page that navigates away mid-install gets the watcher next load.
@@ -613,6 +623,7 @@ class MirrorListings extends MirrorPage {
          url: Uri.parse(platform.listingsUrlFor(values)),
          // 표를 붙이지 않는 자리(등록 직후의 조용한 확인)는 누름을 듣지 않는다.
          watchLabels: mark ? platform.takedownLabels : const [],
+         confirmLabels: mark ? platform.takedownConfirmLabels : const [],
        );
 
   /// 이 매물의 통합 폼 값 — 목록의 카드와 견줄 재료.
@@ -979,17 +990,36 @@ Future<void> clearPlatformSessions() async {
 /// 같은 글자의 종료 버튼이 매물 수만큼 있고, 그중 **한방이 표를 붙인 카드 안에서** 누른
 /// 것만이 이 매물을 내린 것이다 — 울타리가 없으면 옆 매물을 내린 누름을 이 매물의
 /// 종료로 적게 된다. 울타리가 없는 자리(등록 폼)는 지금처럼 페이지 전체를 본다.
-String pressWatcherScript(List<String> labels, {String? within}) =>
+///
+/// [confirmLabels] 는 **두 걸음짜리 종료**를 위한 것이다. 직방 카드의 「매물 종료하기」는
+/// 모달을 열 뿐이고, 광고를 정말 내리는 것은 그 모달의 「네, 종료합니다」다. 첫 누름을
+/// 종료로 세면 광고는 그대로 남은 채 한방만 내렸다고 적는다 — 그래서 첫 누름은
+/// **겨누기만** 하고, 확인 단추가 눌릴 때 비로소 알린다.
+///
+/// 확인 단추는 모달 안에 있어 카드 **밖**일 수 있으므로 울타리를 적용하지 않는다.
+/// 대신 겨눈 뒤에만 세고, 그사이 다른 것을 누르면(「아니오」·바깥 클릭) 겨냥을 푼다.
+/// 비어 있으면 예전 그대로 — 첫 누름이 곧 그 일이다(다방은 네이티브 `confirm` 으로
+/// 한 번 더 묻고, 그 답은 [MirrorPage._confirm] 이 사람에게 넘긴다).
+String pressWatcherScript(
+  List<String> labels, {
+  String? within,
+  List<String> confirmLabels = const [],
+}) =>
     '''
 (() => {
   const labels = ${jsonEncode(labels)};
   const within = ${jsonEncode(within)};
+  const confirmLabels = ${jsonEncode(confirmLabels)};
   if (window.__flrPressWatch) {
     window.__flrPressWatch.labels = labels;
     window.__flrPressWatch.within = within;
+    window.__flrPressWatch.confirmLabels = confirmLabels;
     return;
   }
-  const watch = window.__flrPressWatch = {labels, within};
+  const watch = window.__flrPressWatch = {labels, within, confirmLabels, armed: null};
+  // 겨냥은 오래 남겨 두지 않는다. 모달을 열어 둔 채 딴 일을 하다 한참 뒤에 누른
+  // 확인이 이 매물의 것이라는 보장이 없다.
+  const armFor = 120000;
   const norm = value => String(value || '').replace(/\\s+/g, ' ').trim();
   const blocked = el => el.disabled || el.getAttribute('aria-disabled') === 'true' ||
     el.classList.contains('cursor-not-allowed');
@@ -999,12 +1029,33 @@ String pressWatcherScript(List<String> labels, {String? within}) =>
     const el = event.target && event.target.closest &&
       event.target.closest('button, [role="button"], input[type="submit"], a');
     if (!el || blocked(el)) return;
-    if (watch.within && !el.closest(watch.within)) return;
     const label = norm(el.innerText || el.value || el.textContent);
-    if (!watch.labels.includes(label)) return;
-    try {
-      window.MirrorPress.postMessage(JSON.stringify({label, url: location.href}));
-    } catch (_) {}
+    const tell = said => {
+      try {
+        window.MirrorPress.postMessage(JSON.stringify({label: said, url: location.href}));
+      } catch (_) {}
+    };
+    // 확인 단추 — 울타리 밖(모달)에 있어도 좋지만, 겨눈 뒤여야 한다.
+    if (watch.confirmLabels.includes(label)) {
+      const armed = watch.armed;
+      watch.armed = null;
+      if (armed && Date.now() - armed.at < armFor) tell(armed.label);
+      return;
+    }
+    // 종료 단추 — 울타리 안에서 누른 것만 본다. 그 밖의 누름은(모달의 「아니오」,
+    // 옆 카드, 아무 데나) 겨냥을 푼다. 겨눠 둔 채 딴 것을 눌렀다면 그 종료는
+    // 없던 일이다.
+    const takedown = watch.labels.includes(label) &&
+      (!watch.within || !!el.closest(watch.within));
+    if (!takedown) {
+      watch.armed = null;
+      return;
+    }
+    if (!watch.confirmLabels.length) {
+      tell(label);
+      return;
+    }
+    watch.armed = {label, at: Date.now()};
   }, true);
 })();
 ''';

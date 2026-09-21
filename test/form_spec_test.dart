@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:jibang_listing_test/main.dart';
 import 'package:jibang_listing_test/listing_rules.dart';
+import 'package:jibang_listing_test/takedown.dart';
 import 'package:jibang_listing_test/photo_transfer.dart';
 
 void main() {
@@ -1019,6 +1020,22 @@ setTimeout(() => {
       'dabangPhotoBridge': listingPhotoBridgeScript(PhotoTarget.dabang),
       'daangnPhotoBridge': listingPhotoBridgeScript(PhotoTarget.daangn),
       'photoCommand': listingPhotoCommand('append', ['aGVsbG8=']),
+      // 목록 위에서 도는 셋도 같은 자리에서 지킨다 — 여기 문법이 깨지면 번호도
+      // 못 읽고 카드도 못 짚는데, 그 실패는 화면에서 「못 찾았어요」로만 보인다.
+      'listingNumber': listingNumberScript(ListingPlatform.zigbang, const {
+        'title': '볕 잘드는 원룸',
+        'address': '경북 포항시 남구 대도동 168-7',
+        'unit': '202',
+        'trade': '월세',
+        'deposit': '200',
+        'monthlyRent': '20',
+      }),
+      'takedownCard': takedownCardScript(ListingPlatform.zigbang, '50144198'),
+      'pressWatcher': pressWatcherScript(
+        ListingPlatform.zigbang.takedownLabels,
+        within: takedownCardSelector,
+        confirmLabels: ListingPlatform.zigbang.takedownConfirmLabels,
+      ),
     };
     scripts.forEach((name, source) {
       final temp = File(
