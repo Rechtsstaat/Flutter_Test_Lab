@@ -203,7 +203,8 @@ String postcodeBridgeScript(String query) =>
 /// 고지 받음/안 받음 · 기타 · 확인 불가)·입주 가능일 달력·의뢰인 전화번호 [확인].
 /// 「광고등록 규정 동의」와 「매물 등록 완료」는 누르지 않는다.
 String zigbangInjectionScript(String payload) =>
-    '(async () => {\n  const data = $payload;\n$_zigbangAdapterBody';
+    '(async () => {\n  const data = $payload;\n'
+    '  const samplePhone = ${jsonEncode(sampleOwnerPhone)};\n$_zigbangAdapterBody';
 
 const _zigbangAdapterBody = r'''
   window.__flrFormDone = false;
@@ -772,11 +773,20 @@ const _zigbangAdapterBody = r'''
   /* ── 의뢰인 전화번호 [확인] ───────────────────────────────────
    * 직방은 전화번호를 넣고 [확인] 을 누르지 않으면 「‘실매물 확인' 표시 노출을 위해서는,
    * 전화번호를 [확인]해 주셔야 합니다」로 등록을 막는다. [확인] 은 직방이 그 번호가
-   * 집주인 번호로 쓸 수 있는지(중개사 번호·중복 여부)만 묻는 것이다. */
+   * 집주인 번호로 쓸 수 있는지(중개사 번호·중복 여부)만 묻는 것이다 — 곧 **직방에
+   * 그 번호를 묻는 일**이라, 연습용 번호에는 누르지 않는다(아래). */
   async function confirmLessor() {
     if (!filled(data.ownerPhone)) return;
     const phone = digits(data.ownerPhone);
     if (!await fillIn('ownerPhone', 'verification.lessorPhone', phone, sameDigits)) return;
+    /* 연습용 번호([sampleOwnerPhone])에는 누르지 않는다 — 칸만 채우고 사람에게 넘긴다.
+     * 「자동 채우기」로 폼을 한 번 재 볼 때마다 남의 번호를 계정의 이름으로 조회하게
+     * 되기 때문이다. 화면에는 「확인할 항목」으로 남아, 실제 번호로 바꾸면 곧 보인다. */
+    if (phone === digits(samplePhone)) {
+      return mark('ownerPhone.confirm', false,
+        '자동 채우기의 연습용 번호(' + samplePhone + ')라 [확인] 을 누르지 않았습니다. ' +
+        '실제 의뢰인 번호로 바꾼 뒤 화면에서 [확인] 을 눌러 주세요.');
+    }
     const field = byName('verification.lessorPhone');
     // 「의뢰인 정보」 묶음 전체를 본다 — 답(확인되었습니다 · 중복 사유)은 단추 옆이 아니라
     // 그 아래에 새로 그려진다.

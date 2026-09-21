@@ -541,6 +541,14 @@ const shortTermNegotiations = ['이내 협의가능', '이상 협의가능'];
 const airconTypes = ['벽걸이형', '스탠드형', '천장형'];
 const roomFeatureOptions = ['신축', '큰길가'];
 
+/// 통합 폼의 「자동 채우기」가 집주인 연락처 칸에 넣어 두는 **연습용** 번호.
+///
+/// 직방의 전화번호 [확인] 은 칸의 생김새를 보는 것이 아니라 **그 번호를 직방에 묻는**
+/// 일이다(중개사 번호인가 · 이미 다른 매물에 쓰였는가). 연습으로 누른 것도 계정의
+/// 이름으로 남으므로, 직방 어댑터는 이 번호를 만나면 칸만 채우고 [확인] 은 누르지
+/// 않는다 — `remote_form.dart` 의 `confirmLessor`.
+const sampleOwnerPhone = '010-1234-5678';
+
 /// 직방이 집주인 전화번호를 [확인] 했을 때 이미 다른 매물에 쓰인 번호면 고르게 하는
 /// 사유(필수, 실물 2026-09-21). 쓰일지는 [확인] 을 눌러 봐야 알아서 미리 받아 둔다.
 const ownerPhoneDuplicateReasons = ['의뢰인 다주택 보유', '법인 소유', '관리인·대리인 위임', '기타'];
@@ -1120,7 +1128,7 @@ final List<FieldGroup> groups = [
       key: 'ownerPhone',
       label: '집주인 연락처',
       type: InputType.text,
-      example: '010-1234-5678',
+      example: sampleOwnerPhone,
     ),
     MasterField(
       number: 61,

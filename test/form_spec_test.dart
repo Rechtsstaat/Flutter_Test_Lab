@@ -398,6 +398,33 @@ void main() {
     expect(script, isNot(contains('address:')));
   });
 
+  /* 직방의 전화번호 [확인] 은 칸을 보는 것이 아니라 **직방에 그 번호를 묻는** 일이다.
+   * 그래서 통합 폼의 「자동 채우기」가 넣어 두는 연습용 번호에는 누르지 않는다 — 폼을 한
+   * 번 재 볼 때마다 남의 번호가 계정의 이름으로 조회되기 때문이다. 칸은 채워 두고
+   * 「확인할 항목」으로 남겨, 실제 번호로 바꾸면 사람이 직접 누르게 한다. */
+  test('Zigbang adapter leaves [확인] unpressed for the auto-fill sample phone', () {
+    final script = zigbangInjectionScript(
+      jsonEncode({'ownerPhone': sampleOwnerPhone}),
+    );
+    // 연습용 번호는 통합 폼과 **한 곳**에서 온다 — 예시가 바뀌면 빗장도 같이 움직인다.
+    expect(script, contains('const samplePhone = "$sampleOwnerPhone";'));
+    expect(script, contains('if (phone === digits(samplePhone)) {'));
+    expect(script, contains('연습용 번호'));
+    expect(script, contains('실제 의뢰인 번호로 바꾼 뒤 화면에서 [확인] 을 눌러 주세요.'));
+    // 누르기 **전에** 와야 뜻이 있다.
+    expect(
+      script.indexOf('if (phone === digits(samplePhone)) {'),
+      lessThan(script.indexOf('\n    press(button);')),
+    );
+    // 그래도 칸은 채운다 — 사람이 그 자리에서 번호만 고쳐 넣게.
+    expect(
+      script.indexOf("fillIn('ownerPhone', 'verification.lessorPhone'"),
+      lessThan(script.indexOf('if (phone === digits(samplePhone)) {')),
+    );
+    // 실제 번호는 예전 그대로 눌린다 — 빗장은 이 한 번호에만 걸린다.
+    expect(script, contains("mark('ownerPhone.confirm', true)"));
+  });
+
   test('Kakao postcode bridge renders in-page instead of opening a window', () {
     final script = postcodeBridgeScript('"서울특별시 강남구 테헤란로 123"');
     expect(script, contains('inner.embed(host, params)'));
