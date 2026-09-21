@@ -43,6 +43,7 @@ class Listing {
     required this.values,
     required this.channels,
     this.channelDates = const {},
+    this.channelNumbers = const {},
     this.photoPaths = const [],
     this.status = ListingStatus.advertising,
     this.closedReason,
@@ -61,6 +62,14 @@ class Listing {
   /// When each channel last reached [ChannelState.published] or
   /// [ChannelState.removed] — the 등록일 / 종료일 the status cards print.
   final Map<ListingPlatform, DateTime> channelDates;
+
+  /// 플랫폼이 이 매물에 붙인 번호 (직방 「등록번호」, 다방 「매물번호」).
+  ///
+  /// 광고를 내릴 때 **이 번호만이** 남의 매물 수십·수백 건이 걸린 광고 목록에서 이
+  /// 매물을 짚어 준다. 등록을 마친 직후 목록에서 읽어 두고, 그때 못 읽었으면 내릴 때
+  /// 한 번 더 읽는다 — 어느 쪽이든 없을 수 있으므로 없는 채로도 흐름은 돌아간다.
+  final Map<ListingPlatform, String> channelNumbers;
+
   final List<String> photoPaths;
   final ListingStatus status;
   final ClosedReason? closedReason;
@@ -160,6 +169,7 @@ class Listing {
     Map<String, dynamic>? values,
     Map<ListingPlatform, ChannelState>? channels,
     Map<ListingPlatform, DateTime>? channelDates,
+    Map<ListingPlatform, String>? channelNumbers,
     List<String>? photoPaths,
     ListingStatus? status,
     ClosedReason? closedReason,
@@ -170,6 +180,7 @@ class Listing {
     values: values ?? this.values,
     channels: channels ?? this.channels,
     channelDates: channelDates ?? this.channelDates,
+    channelNumbers: channelNumbers ?? this.channelNumbers,
     photoPaths: photoPaths ?? this.photoPaths,
     status: status ?? this.status,
     closedReason: closedReason ?? this.closedReason,
@@ -186,6 +197,9 @@ class Listing {
     'channelDates': {
       for (final entry in channelDates.entries)
         entry.key.name: entry.value.toIso8601String(),
+    },
+    'channelNumbers': {
+      for (final entry in channelNumbers.entries) entry.key.name: entry.value,
     },
     'photoPaths': photoPaths,
     'status': status.name,
@@ -217,12 +231,24 @@ class Listing {
         if (platform != null && date != null) channelDates[platform] = date;
       }
     }
+    final rawNumbers = json['channelNumbers'];
+    final channelNumbers = <ListingPlatform, String>{};
+    if (rawNumbers is Map) {
+      for (final entry in rawNumbers.entries) {
+        final platform = _byName(ListingPlatform.values, '${entry.key}');
+        final number = '${entry.value}'.trim();
+        if (platform != null && number.isNotEmpty) {
+          channelNumbers[platform] = number;
+        }
+      }
+    }
     return Listing(
       id: id,
       createdAt: createdAt,
       values: Map<String, dynamic>.from(json['values'] as Map? ?? const {}),
       channels: channels,
       channelDates: channelDates,
+      channelNumbers: channelNumbers,
       photoPaths: List<String>.from(json['photoPaths'] as List? ?? const []),
       status:
           _byName(ListingStatus.values, '${json['status']}') ??

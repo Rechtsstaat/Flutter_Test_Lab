@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jibang_listing_test/fields.dart';
 import 'package:jibang_listing_test/mobile_layout.dart';
+import 'package:jibang_listing_test/takedown.dart';
 
 /// What only a browser can answer: will the mirror serve the page the app
 /// asks for, and does the 등록 button land where a thumb can reach it.
@@ -133,6 +134,174 @@ void main() {
     }, timeout: const Timeout(Duration(minutes: 3)));
   });
 
+  // 광고 목록 위에서 도는 내리기 스크립트 (lib/takedown.dart).
+  //
+  // 이 둘은 offline 으로 흉내 낼 수 없다. 목록에는 이 중개사의 매물이 통째로 걸려
+  // 있고(직방 광고 중 45건, 다방 광고 진행 119건) 같은 글자의 종료 버튼이 그 수만큼
+  // 있는데, 「그중 어느 것이 그 매물인가」와 「그 카드의 버튼이 390px 화면 어디에
+  // 앉는가」는 실제 페이지만이 답할 수 있다.
+  group('내리기 — 목록에서 그 매물을 짚는다', () {
+    /// 각 미러의 광고 목록에 실제로 걸려 있는 매물 한 건 (실측 2026-09-21).
+    /// 통합 폼이 그 매물을 올렸다면 들고 있었을 값을 그대로 옮겨 적었다. 미러의
+    /// 수집본이 바뀌면 여기가 먼저 깨지는데, 그것이 맞다 — 바뀐 것을 알아야 한다.
+    const fixtures = {
+      ListingPlatform.zigbang: (
+        number: '50144198',
+        values: {
+          'title': '단기 가능 볕 잘드는 깔끔 원룸',
+          'address': '경상북도 포항시 남구 대도동 150-36',
+          'unit': '202',
+          'trade': '월세',
+          'deposit': '200',
+          'monthlyRent': '25',
+        },
+      ),
+      ListingPlatform.dabang: (
+        number: '58948955',
+        values: {
+          'title': '수가성근교 깔끔한 분리형 원룸',
+          'address': '경상북도 포항시 북구 죽도동 667-17',
+          'unit': '302',
+          'trade': '월세',
+          'deposit': '200',
+          'monthlyRent': '20',
+        },
+      ),
+    };
+
+    /// 목록을 열고 [scripts] 를 차례로 돌린 뒤의 보고. 모바일 레이아웃은 앱이 모든
+    /// 플랫폼 페이지에 까는 것이라 여기서도 맨 앞에 깐다.
+    Future<Map<String, dynamic>?> onListings(
+      ListingPlatform platform,
+      List<String> scripts,
+    ) async {
+      final stamp = DateTime.now().microsecondsSinceEpoch;
+      final files = [
+        mirrorMobileLayoutScript(
+          platform,
+          Uri.parse(mirrorOf(platform).listings),
+        )!,
+        ...scripts,
+      ].indexed.map((entry) {
+        final file = File(
+          '${Directory.systemTemp.path}/flr_takedown_${platform.name}_'
+          '$stamp${entry.$1}.js',
+        );
+        return file..writeAsStringSync(entry.$2);
+      }).toList();
+      try {
+        return await run([
+          '--job=listings',
+          ...urlsOf(platform),
+          // US(\u001f), not a space: 파일 경로에도 「광고 종료」에도 빈칸이 들어
+          // 있다. NUL 도 못 쓴다 — 인자는 첫 NUL 에서 끝나 버린다.
+          '--scripts=${files.map((file) => file.path).join('\u001f')}',
+          '--labels=${platform.takedownLabels.join('\u001f')}',
+          '--width=$viewport',
+          '--height=844',
+        ]);
+      } finally {
+        for (final file in files) {
+          if (file.existsSync()) file.deleteSync();
+        }
+      }
+    }
+
+    for (final platform in livePlatforms) {
+      final fixture = fixtures[platform]!;
+
+      test('${platform.label} 목록에서 매물 번호를 읽어 낸다', () async {
+        final report = await onListings(platform, [
+          listingNumberScript(platform, fixture.values),
+        ]);
+        if (report == null) return;
+
+        expect(
+          report['number'],
+          isNotNull,
+          reason:
+              '번호를 읽는 스크립트가 아무 답도 하지 않았다 '
+              '(${report['landed']})',
+        );
+        final answer =
+            jsonDecode('${report['number']}') as Map<String, dynamic>;
+        expect(
+          answer['cards'],
+          greaterThan(1),
+          reason: '목록에서 카드를 한 장도 세지 못했다면 읽은 번호도 우연이다',
+        );
+        expect(
+          answer['number'],
+          fixture.number,
+          reason:
+              '「${fixture.values['title']}」을 ${answer['score']}점으로 '
+              '${answer['why']} 에서 찾았다 (2등 ${answer['runnerUp']}점)',
+        );
+        // 미러의 깐깐이가 잡는 짓은 하지 않는다 — 검색창에 값을 꽂는 쪽도 마찬가지다.
+        expect(jsonDecode('${report['violations']}'), isEmpty);
+      }, timeout: const Timeout(Duration(minutes: 3)));
+
+      test('${platform.label} 그 번호의 카드에만 표를 붙이고 종료 버튼을 화면에 올린다', () async {
+        final report = await onListings(platform, [
+          takedownCardScript(platform, fixture.number),
+        ]);
+        if (report == null) return;
+
+        final card = report['card'] as Map<String, dynamic>?;
+        expect(
+          card,
+          isNotNull,
+          reason:
+              '${fixture.number} 카드를 찾지 못했다 — 목록에는 있는데 '
+              '(${report['landed']}) 스크립트가 못 짚었다면 카드를 알아보는 법이 '
+              '틀린 것이다',
+        );
+        expect(
+          card!['marked'],
+          1,
+          reason: '표가 둘 이상이면 어느 것이 그 매물인지 말해 주지 못한다',
+        );
+        expect(
+          card['text'],
+          contains(fixture.number),
+          reason: '표가 엉뚱한 카드에 붙었다: ${card['text']}',
+        );
+        expect(
+          card['onScreen'],
+          isTrue,
+          reason: '카드가 ${card['rect']} 에 있다 — 스크롤이 그 자리로 가지 않았다',
+        );
+
+        final button = card['button'] as Map<String, dynamic>?;
+        expect(
+          button,
+          isNotNull,
+          reason: '표가 붙은 카드 안에 ${platform.takedownLabels} 가 없다',
+        );
+        expect(
+          button!['insideX'],
+          isTrue,
+          reason: '${button['label']} 가 ${button['rect']} — 화면 옆으로 나갔다',
+        );
+        expect(
+          button['inside'],
+          isTrue,
+          reason: '${button['label']} 가 ${button['rect']} — 위아래로 나갔다',
+        );
+        expect(
+          button['hitsSelf'],
+          isTrue,
+          reason: '${button['rect']} 에서 ${button['label']} 를 무언가가 덮고 있다',
+        );
+
+        // 카드를 찾았다고 앱에 알려야 눌림 울타리가 쳐진다.
+        final told = jsonDecode('${report['told']}') as Map<String, dynamic>;
+        expect(told['found'], isTrue);
+        expect(told['number'], fixture.number);
+      }, timeout: const Timeout(Duration(minutes: 3)));
+    }
+  });
+
   group('the mobile layout makes the sign-in page usable', () {
     for (final platform in ListingPlatform.values) {
       test('${platform.label} 로그인 controls are reachable', () async {
@@ -213,8 +382,10 @@ void main() {
             '--job=layout',
             ...urlsOf(platform),
             '--script=${script.path}',
-            // NUL, not a space: 「매물 등록 완료」 is one label with spaces in it.
-            '--labels=${platform.submitLabels.join('\u0000')}',
+            // US(\u001f), not a space: 「매물 등록 완료」 is one label with
+            // spaces in it. Not NUL either — an argument ends at its first NUL,
+            // so a NUL-joined list arrives at the probe with only its head.
+            '--labels=${platform.submitLabels.join('\u001f')}',
             '--width=$viewport',
             '--height=844',
           ]);

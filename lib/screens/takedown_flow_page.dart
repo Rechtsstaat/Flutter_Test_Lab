@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data/app_store.dart';
@@ -15,6 +17,21 @@ import 'listing_detail_page.dart' show formatDate;
 /// chrome. The agent presses the platform's own 종료 button there; hearing
 /// that press moves on to the next platform. Leaving a page without pressing
 /// keeps that platform live.
+///
+/// ## 어느 카드가 그 매물인가
+///
+/// 광고 목록에는 이 중개사의 매물이 통째로 걸려 있고(미러 실측 2026-09-21: 직방
+/// 광고 중 45건, 다방 광고 진행 119건), 같은 글자의 종료 버튼이 그 수만큼 있다.
+/// 그래서 이 화면은 목록을 열어 두기만 하지 않는다:
+///
+/// 1. 등록할 때 적어 둔 매물 번호([Listing.channelNumbers])로 그 카드를 찾아
+///    화면 가운데로 올리고 테를 두른다.
+/// 2. 번호가 없으면(예전 매물이거나 등록 직후에 못 읽었으면) 제목·주소·호·금액으로
+///    목록에서 찾아내고, 찾아낸 번호는 저장소에 적어 둔다.
+/// 3. **테가 둘린 카드 안에서 누른 종료만** 이 매물을 내린 것으로 센다. 옆 매물을
+///    내린 누름을 이 매물의 종료로 적지 않기 위해서다.
+///
+/// 누르는 것은 끝까지 사람이다. 되돌릴 수 없는 누름을 한방이 대신하지 않는다.
 class TakedownFlowPage extends StatefulWidget {
   const TakedownFlowPage({
     super.key,
@@ -39,7 +56,13 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
 
   final _removed = <ListingPlatform>{};
   final _skipped = <ListingPlatform>{};
-  final _pages = <ListingPlatform, MirrorPage>{};
+  final _pages = <ListingPlatform, MirrorListings>{};
+
+  /// 플랫폼이 이 매물에 붙인 번호. 저장소에서 들고 오고, 목록에서 뒤늦게 읽어 내면
+  /// 여기와 저장소 양쪽에 적는다.
+  late final Map<ListingPlatform, String> _numbers = {
+    ...widget.listing.channelNumbers,
+  };
 
   int _index = 0;
   bool _done = false;
@@ -68,10 +91,11 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
 
   void _open(int index) {
     final platform = _channels[index];
-    _pages[platform] = MirrorPage(
+    _pages[platform] = MirrorListings(
       platform: platform,
-      url: Uri.parse(platform.listingsUrl),
-      watchLabels: platform.takedownLabels,
+      values: widget.listing.values,
+      number: _numbers[platform],
+      mark: true,
     )..addListener(() => _onPage(platform));
     _index = index;
   }
@@ -79,11 +103,45 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
   void _onPage(ListingPlatform platform) {
     if (!mounted) return;
     final page = _pages[platform];
-    if (page?.pressedLabel != null && _removed.add(platform)) {
+    if (page == null) return;
+    // 목록에서 뒤늦게 번호를 읽어 냈다면 그대로 흘려보내지 않는다 — 다음 번에 이
+    // 매물을 내릴 때는 처음부터 그 카드로 갈 수 있어야 한다.
+    final number = page.number;
+    if (number != null && _numbers[platform] != number) {
+      _numbers[platform] = number;
+      unawaited(widget.store.rememberNumber(widget.listing, platform, number));
+    }
+    if (page.pressedLabel != null && _removed.add(platform)) {
       _advance();
     } else {
       setState(() {});
     }
+  }
+
+  /// 지금 이 플랫폼에서 사람에게 할 말. 「무엇을 누를지」보다 「어느 것이 그 매물인지」를
+  /// 먼저 말한다 — 목록에는 같은 글자의 종료 버튼이 매물 수만큼 있기 때문이다.
+  (String, String?) _toastFor(ListingPlatform platform) {
+    final page = _pages[platform];
+    final number = page?.number ?? _numbers[platform];
+    // 번호를 모르면 이름으로 부른다 — 사람이 목록에서 눈으로 찾을 때 쥘 것이 그것뿐이다.
+    final what = number == null
+        ? '「${widget.listing.headline}」'
+        : '${platform.listingNumberLabel} $number';
+    if (page == null || !page.loaded) {
+      return ('${platform.label} 광고 목록을 여는 중이에요', null);
+    }
+    if (page.cardFound) {
+      return (
+        '$what 매물을 찾았어요',
+        '파란 테두리 카드의 「${platform.takedownLabels.first}」를 눌러주세요',
+      );
+    }
+    if (page.gaveUp) {
+      // 목록에서 못 짚었다. 여기서는 울타리도 풀려 있으므로([MirrorListings.pressScope])
+      // 사람이 제 손으로 찾아 누르면 그대로 들린다 — 무엇을 찾아야 하는지 말해 준다.
+      return ('목록에서 이 매물을 찾지 못했어요', '$what 매물을 직접 찾아 종료해주세요');
+    }
+    return ('$what 매물을 찾는 중이에요', '잠시만 기다려주세요');
   }
 
   Future<void> _advance() async {
@@ -92,8 +150,10 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
       return;
     }
     if (_removed.isNotEmpty) {
+      // 저장소에 있는 쪽을 닫는다. 흐름 도중에 읽어 낸 번호가 거기 적혀 있으므로,
+      // 들고 들어온 옛 기록으로 닫으면 그 번호를 도로 지우게 된다.
       await widget.store.close(
-        widget.listing,
+        widget.store.byId(widget.listing.id) ?? widget.listing,
         reason: ClosedReason.adEnded,
         channels: _removed,
       );
@@ -152,6 +212,7 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
   Widget build(BuildContext context) {
     final current = _channels[_index];
     final front = _done ? _viewing : current;
+    final (toastTitle, toastDetail) = _toastFor(current);
     // All pages stay mounted; the one in front is painted last.
     final order = [
       ..._pages.keys.where((platform) => platform != front),
@@ -217,8 +278,16 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
                               child: SafeArea(
                                 top: false,
                                 child: TimedToast(
-                                  toastKey: current,
-                                  title: '종료하기 버튼을 눌러주세요',
+                                  // 찾는 중 → 찾았다로 바뀔 때 토스트를 다시 띄운다.
+                                  // 사람이 기다려야 하는 말과 눌러야 하는 말은
+                                  // 다른 말이다.
+                                  toastKey: (
+                                    current,
+                                    _pages[current]?.cardFound,
+                                    _pages[current]?.gaveUp,
+                                  ),
+                                  title: toastTitle,
+                                  detail: toastDetail,
                                 ),
                               ),
                             ),
@@ -245,6 +314,7 @@ class _TakedownFlowPageState extends State<TakedownFlowPage> {
                       removed: _removed,
                       skipped: _skipped,
                       channels: _channels,
+                      numbers: _numbers,
                       onView: (platform) => setState(() => _viewing = platform),
                       onHome: _home,
                     ),
@@ -264,6 +334,7 @@ class _Result extends StatelessWidget {
     required this.removed,
     required this.skipped,
     required this.channels,
+    required this.numbers,
     required this.onView,
     required this.onHome,
   });
@@ -272,6 +343,7 @@ class _Result extends StatelessWidget {
   final Set<ListingPlatform> removed;
   final Set<ListingPlatform> skipped;
   final List<ListingPlatform> channels;
+  final Map<ListingPlatform, String> numbers;
   final ValueChanged<ListingPlatform> onView;
   final VoidCallback onHome;
 
@@ -319,9 +391,14 @@ class _Result extends StatelessWidget {
                         action: '바로보기',
                         actionIcon: Icons.north_east_rounded,
                         onAction: () => onView(platform),
-                        subline: listing.channelDates[platform] == null
-                            ? null
-                            : '종료일: ${formatDate(listing.channelDates[platform]!)}',
+                        // 종료일 옆에 번호를 남긴다. 사람이 플랫폼에 직접 들어가
+                        // 「정말 내려갔나」를 확인할 때 들고 갈 수 있는 한 가지다.
+                        subline: [
+                          if (listing.channelDates[platform] != null)
+                            '종료일: ${formatDate(listing.channelDates[platform]!)}',
+                          if (numbers[platform] != null)
+                            '${platform.listingNumberLabel} ${numbers[platform]}',
+                        ].join(' · ').ifEmpty(null),
                       )
                     : ChannelRow(
                         mark: RowMark.waiting,
@@ -336,4 +413,9 @@ class _Result extends StatelessWidget {
       ),
     );
   }
+}
+
+extension on String {
+  /// 빈 줄은 줄이 아니다 — [ChannelRow] 의 부제는 없으면 아예 없어야 한다.
+  String? ifEmpty(String? fallback) => isEmpty ? fallback : this;
 }

@@ -134,6 +134,25 @@ class AppStore extends ChangeNotifier {
     await _persist();
   }
 
+  /// 플랫폼이 이 매물에 붙인 번호를 적어 둔다.
+  ///
+  /// 등록 직후에 읽어 두지만, 그때 목록이 아직 안 그려졌거나 닮은 매물이 둘이어서
+  /// 못 읽는 일이 있다. 내릴 때 뒤늦게 읽어 내면 여기로 들어온다 — 이미 적힌 것과
+  /// 같으면 저장소를 건드리지 않는다.
+  Future<Listing> rememberNumber(
+    Listing listing,
+    ListingPlatform platform,
+    String number,
+  ) async {
+    final current = byId(listing.id) ?? listing;
+    if (current.channelNumbers[platform] == number) return current;
+    final next = current.copyWith(
+      channelNumbers: {...current.channelNumbers, platform: number},
+    );
+    await save(next);
+    return next;
+  }
+
   Listing? byId(String id) {
     for (final listing in _listings) {
       if (listing.id == id) return listing;

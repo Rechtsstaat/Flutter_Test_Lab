@@ -233,6 +233,18 @@ extension ListingPlatformConfig on ListingPlatform {
     ListingPlatform.daangn => const ['매물 등록하기'],
   };
 
+  /// 플랫폼이 매물에 붙여 주는 번호를 **그 플랫폼이 부르는 이름** (미러 실측
+  /// 2026-09-21: 직방 카드는 「등록번호 : 50144198」, 다방 카드는 번호만 「58948955」를
+  /// 달고 검색창이 「매물번호」라고 적는다).
+  ///
+  /// 사람에게 말을 걸 때 쓴다 — 목록에서 눈으로 견줄 글자가 플랫폼마다 다르기
+  /// 때문이다. 번호를 **읽어 내는** 쪽은 두 이름을 모두 받아 준다([listingNumberScript]).
+  String get listingNumberLabel => switch (this) {
+    ListingPlatform.zigbang => '등록번호',
+    ListingPlatform.dabang => '매물번호',
+    ListingPlatform.daangn => '매물번호',
+  };
+
   /// The platform's own "take this listing down" buttons on [listingsUrl].
   /// The 당근 mirror has not captured one yet.
   List<String> get takedownLabels => switch (this) {

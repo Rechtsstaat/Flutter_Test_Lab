@@ -8,6 +8,8 @@
 //   --job=signin     install it on --login and measure the sign-in controls
 //   --job=routes     sign in at --login, then report where each app URL lands
 //   --job=structure  sign in, open --form, and return what --script reports
+//   --job=listings   open --listings, run the --scripts in order, and report
+//                    the listing number they read and the card they marked
 //
 // The last one runs a read-only structure probe (test/tools/*_form_probe.js)
 // against the mirror, which is the baseline the same probe's live capture gets
@@ -51,7 +53,10 @@ const args = Object.fromEntries(
 const job = args.job || 'layout';
 const width = Number(args.width || 390);
 const height = Number(args.height || 844);
-const labels = args.labels ? args.labels.split('\0') : [];
+// 빈칸이 들어 있는 값들을 한 인자에 싣는 구분자. NUL 은 못 쓴다 — 프로세스 인자는
+// NUL 에서 끝나므로, 넘기는 순간 뒤가 통째로 잘린다. US(\u001f)는 인자로 그대로 간다.
+const SPLIT = '\u001f';
+const labels = args.labels ? args.labels.split(SPLIT) : [];
 
 const done = value => {
   process.stdout.write(JSON.stringify(value));
@@ -340,6 +345,77 @@ try {
       };
     }
     done({job, signedOut, afterLogin, signedIn});
+  }
+
+  // 광고 목록 위에서 내리기 스크립트를 실제로 돌린다 (lib/takedown.dart).
+  //
+  // 목록 쪽은 폼과 사정이 다르다. 목록에는 이 중개사의 매물이 통째로 걸려 있고, 같은
+  // 글자의 종료 버튼이 그 수만큼 있다 — 「찾았다」를 offline 에서 흉내 낼 수 있는
+  // DOM 이 아니다. 스크립트가 붙인 표와 그 카드의 종료 버튼이 390px 화면 어디에
+  // 앉는지는 브라우저만 답할 수 있다.
+  //
+  // --scripts 는 NUL 로 이은 파일 목록이고, 차례로 돌린다. 스크립트가 쓰는 두 창구
+  // (ListingNumber · TakedownCard)는 여기서 받아 둔다.
+  if (job === 'listings') {
+    await goto(args.listings);
+    const landed = directory(await evaluate('location.href'));
+    if (landed !== directory(args.listings)) {
+      done({skip: 'mirror did not serve the listings page (landed on ' + landed + ')'});
+    }
+    await evaluate(`window.__flrNumber = null; window.__flrCard = null;
+      window.ListingNumber = {postMessage: value => { window.__flrNumber = value; }};
+      window.TakedownCard = {postMessage: value => { window.__flrCard = value; }};`);
+    const installed = [];
+    for (const path of (args.scripts || '').split(SPLIT).filter(Boolean)) {
+      installed.push(await evaluate(readFileSync(path, 'utf8')));
+      await sleep(1200);
+    }
+    // 번호를 읽는 쪽은 목록이 그려질 때까지 스스로 기다린다.
+    const budget = Number(args.wait || 25000);
+    for (let waited = 0; waited < budget; waited += 500) {
+      if (await evaluate('!!window.__flrNumber')) break;
+      await sleep(500);
+    }
+    // 표가 붙은 카드와, 그 카드 안의 종료 버튼이 엄지에 닿는가.
+    const card = await evaluate(`(() => {
+      const norm = v => String(v || '').replace(/\\s+/g, ' ').trim();
+      const card = document.querySelector('[data-flr-takedown-card]');
+      if (!card) return null;
+      const vw = document.documentElement.clientWidth;
+      const vh = document.documentElement.clientHeight;
+      const labels = ${JSON.stringify(labels)};
+      const button = [...card.querySelectorAll('button, a, [role="button"]')]
+        .filter(el => labels.includes(norm(el.textContent)))[0];
+      const box = el => {
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          Math.min(Math.max(r.left + r.width / 2, 1), vw - 1),
+          Math.min(Math.max(r.top + r.height / 2, 1), vh - 1));
+        return {
+          rect: {x: Math.round(r.x), y: Math.round(r.y),
+                 w: Math.round(r.width), h: Math.round(r.height)},
+          insideX: r.left >= -1 && r.right <= vw + 1,
+          // 카드는 화면보다 클 수 있다. 「닿는가」는 버튼에만 묻는다.
+          onScreen: r.top < vh && r.bottom > 0,
+          inside: r.top >= -1 && r.bottom <= vh + 1,
+          hitsSelf: !!hit && (hit === el || el.contains(hit)),
+        };
+      };
+      return {
+        tag: card.tagName,
+        text: norm(card.innerText).slice(0, 200),
+        ...box(card),
+        button: button ? {label: norm(button.textContent), ...box(button)} : null,
+        // 표가 붙은 카드는 목록에 **하나뿐**이어야 한다.
+        marked: document.querySelectorAll('[data-flr-takedown-card]').length,
+      };
+    })()`);
+    done({
+      job, landed, installed, card,
+      number: await evaluate('window.__flrNumber'),
+      told: await evaluate('window.__flrCard'),
+      violations: await evaluate('JSON.stringify(window.__FLR_VIOLATIONS__ || [])'),
+    });
   }
 
   await goto(args.form);
