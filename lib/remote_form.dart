@@ -884,9 +884,27 @@ const _dabangAdapterBody = r'''
   const output = {applied: 0, missing: [], unsupported: [], verified: 0, violations: []};
   const publish = () => { try { window.ListingResult.postMessage(JSON.stringify(output)); } catch (_) {} };
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  // 깐깐이(mirror 의 엄격 층)는 click/input/change 를 삼켰다가 0.3초 뒤에 다시 쏜다.
-  // 그래서 조작 하나하나의 반응을 기다려야 한다.
-  const REACT = 420;
+  /* 조작 하나가 끝난 뒤 폼이 가라앉기를 기다리는 시간.
+   *
+   * 420 이었다. 그 숫자는 **미러의 깐깐이 층**에서 나온 것이다 — click/input/change 를
+   * 삼켰다가 0.3초 뒤에 다시 쏘던 시험용 층이라 그만큼 기다려야 했다. 미러는 걷었고
+   * (9bdb82f), 지금 어댑터가 서 있는 곳은 실물 다방이다.
+   *
+   * 실물에서 재 보았다(2026-09-22, `pro.dabangapp.com/form/room`, 조작 뒤 DOM 이
+   * 잠잠해질 때까지): 글자 칸 9~16ms · 라디오 10ms · 거래 종류를 바꿔 가격 줄이 통째로
+   * 다시 그려질 때 12ms · 가장 무거운 select(건축물용도) 167ms. 420 은 **가장 무거운
+   * 것의 두 배 반, 보통의 서른 배**를 자는 셈이었다. 마흔 남짓한 조작에 그대로 곱해져
+   * 10초 가까이가 기다림만으로 흘렀다.
+   *
+   * 200 은 잰 것 중 가장 무거운 것(167ms)을 덮는다. 폰의 WebView 는 이보다 느릴 수
+   * 있어 여유를 두었다. 이 기다림은 **값을 확인한 뒤**에 오는 것이라(`fill`·`choose`
+   * 는 `waitUntil` 로 값이 앉은 것을 보고 나서 잔다) 짧아도 값을 잃지 않고, 끝의
+   * [reconcile] 이 한 번 더 맞춘다. 느린 기기에서 값이 새는 것 같으면 이 숫자만
+   * 되돌리면 된다.
+   *
+   * 당근 어댑터의 같은 상수는 그대로 두었다 — 재 본 것은 다방뿐이고, 당근은 지금
+   * 내려 둔 플랫폼이다([ListingPlatform.status]). */
+  const REACT = 200;
   const text = el => el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '';
   const norm = value => String(value === undefined || value === null ? '' : value).replace(/\s+/g, '');
   const filled = value => value !== undefined && value !== null && value !== '' &&

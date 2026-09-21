@@ -517,6 +517,26 @@ void main() {
     }
   });
 
+  /* 다방이 유난히 오래 걸리던 까닭은 **기다림**이었다.
+   *
+   * 조작 하나마다 420ms 를 잤는데, 그 숫자는 미러의 깐깐이 층(이벤트를 삼켰다가
+   * 0.3초 뒤에 다시 쏘던 시험용 층)에서 나온 것이다. 미러는 걷었다. 실물 다방에서
+   * 재 보니 글자 칸 9~16ms · 라디오 10ms · 가장 무거운 select 167ms 였다
+   * (2026-09-22). 마흔 남짓한 조작에 곱해지면 10초 가까이가 기다림만으로 흘렀다. */
+  test('다방 어댑터는 실물이 가라앉는 만큼만 기다린다', () {
+    final dabang = dabangInjectionScript('{}');
+    expect(dabang, contains('const REACT = 200;'));
+    expect(dabang, isNot(contains('const REACT = 420;')));
+    // 기다림은 **값을 확인한 뒤**에 온다 — 짧아도 값을 잃지 않는다.
+    expect(dabang, contains('ok(); keep(); await sleep(REACT); return true;'));
+
+    // 직방은 이런 고정 기다림이 없다 — 느렸던 쪽은 다방이다.
+    expect(zigbangInjectionScript('{}'), isNot(contains('sleep(REACT)')));
+
+    // 당근은 재 보지 않았으므로 그대로 둔다.
+    expect(daangnInjectionScript('{}'), contains('const REACT = 420;'));
+  });
+
   test('Kakao postcode bridge renders in-page instead of opening a window', () {
     final script = postcodeBridgeScript('"서울특별시 강남구 테헤란로 123"');
     expect(script, contains('inner.embed(host, params)'));
