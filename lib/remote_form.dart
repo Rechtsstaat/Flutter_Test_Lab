@@ -1221,9 +1221,10 @@ const _dabangAdapterBody = r'''
         note('건축물대장 자동 조회: 면적·용도·승인일이 공공데이터 값으로 덮어써지지 않도록 「직접 입력」으로 닫았습니다. 세 항목은 통합 폼의 값으로 채웁니다.');
       }
     }
+    // 동 칸은 「동 정보 없음」을 체크하면 문서에서 **사라진다** — 없으면 없는 대로 둔다.
     const dong = cell.querySelector('input[name="dong"]');
     const ho = cell.querySelector('input[name="ho"]');
-    if (!dong || !ho || dong.disabled || ho.disabled) return;
+    if (!ho || ho.disabled || (dong && dong.disabled)) return;
     const picked = [...cell.querySelectorAll('[class*=AddressList] li')].map(li => norm(text(li))).join('|');
     if (!picked) return;
     if (window.__flrDabangAddress === picked) return;
@@ -1267,8 +1268,15 @@ const _dabangAdapterBody = r'''
     });
   };
 
-  /// 카카오 주소 화면을 띄우고 주소가 앉을 때까지 기다린다. 앉았는지는 동·호 칸이
-  /// 열렸는지로 안다 — 다방이 주소를 받아들였을 때만 풀리는 자물쇠다.
+  /* 카카오 주소 화면을 띄우고 주소가 앉을 때까지 기다린다. 앉았는지는 **호 칸이
+   * 열렸는지**로 안다 — 다방이 주소를 받아들였을 때만 풀리는 자물쇠다.
+   *
+   * 동 칸으로 재면 안 된다. 주소가 앉는 순간 [watchAddress] 가 [fillUnit] 을 부르고,
+   * 「동 정보 없음」을 체크하면 다방은 동 칸을 **문서에서 지운다**(실물 2026-09-22).
+   * 그 체크가 이 기다림의 다음 물음보다 먼저 오면 동 칸은 영영 안 열리고, 주소는 이미
+   * 앉았는데도 60초를 통째로 기다린 뒤 「주소가 확정되지 않아」라고 적었다 — 실기기
+   * 두 번 중 한 번, 데스크톱에서 손으로 고를 때는 두 번 다. 호 칸은 그 체크와 상관없이
+   * 늘 거기 있다(체크 99ms 뒤 동 칸은 사라지고, 호 칸은 119ms 에 열렸다). */
   const pickAddress = async () => {
     const cell = addressCell();
     const search = cell && [...cell.querySelectorAll('button')].find(button => norm(text(button)) === '검색');
@@ -1276,8 +1284,8 @@ const _dabangAdapterBody = r'''
     press(search);
     const landed = await waitUntil(() => {
       const now = addressCell();
-      const dong = now && now.querySelector('input[name="dong"]');
-      return dong && !dong.disabled ? dong : null;
+      const ho = now && now.querySelector('input[name="ho"]');
+      return ho && !ho.disabled ? ho : null;
     }, 60000);
     afterAddressPicked();
     if (!landed) {
@@ -1567,7 +1575,21 @@ const _dabangAdapterBody = r'''
     return done;
   };
 
+  const contact = () => { const cell = cellOf('agent_contact_info', '연락처'); return cell ? cell.querySelector('select') : null; };
+
   try {
+    /* ⓪ 다방이 폼을 **다 차릴 때까지** 기다린다.
+     *
+     * 폼의 뼈대([formReadyScript])는 계정 정보가 오기 전에 먼저 그려지고, 계정 정보가
+     * 오면 다방이 폼을 **처음 상태로 한 번 되돌린다** — 그 사이에 누른 것은 사라진다.
+     * 실물에서 재 보았다(2026-09-22, 폼을 다섯 번 새로 띄움): 뼈대는 44~64ms 에 뜨고,
+     * 그 직후 고른 「단독주택」이 191~1005ms 에 「빌라/연립/다세대」로 되돌아갔다. 되돌림과
+     * 같은 순간(0~53ms 뒤)에 연락처 선택란이 계정의 번호를 받는다 — 그래서 그것을 기다린다.
+     * 실기기에서는 이 되돌림이 「건물 일부」를 3초 동안 헛기다리게 하고 「찾지 못했다」를
+     * 남겼다. 연락처가 끝내 안 오면(계정·화면이 다르면) 5초 뒤에 그냥 간다 — 되돌림이
+     * 와도 끝의 [reconcile] 이 맞춘다. */
+    await waitUntil(() => { const s = contact(); return s && s.options.length > 1 ? s : null; }, 5000);
+
     if (window.__flrPostcode) window.__flrPostcode.query = data.address || '';
     watchAddress();
 
@@ -1780,7 +1802,6 @@ const _dabangAdapterBody = r'''
     if (filled(data.privateMemo)) fill('privateMemo', pick('detail_info', '비공개 메모', 'textarea,input'), data.privateMemo);
 
     // ⑱ 연락처 — 비워 두면 대표 연락처로 들어간다. 첫 연락처를 그대로 고른다.
-    const contact = () => { const cell = cellOf('agent_contact_info', '연락처'); return cell ? cell.querySelector('select') : null; };
     if (contact() && !contact().value) {
       const first = [...contact().options].find(o => o.value !== '');
       if (first) await selectValue('agentContact', contact, first.value);
