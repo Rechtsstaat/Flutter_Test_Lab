@@ -1,7 +1,69 @@
-/// The JavaScript 한방 runs inside each mirror: the Kakao postcode bridge, the
-/// per-platform adapters, and the frame script that picks a Kakao result.
-/// `MirrorSession` decides when each one runs.
+/// The JavaScript 한방 runs inside each platform page: the Kakao postcode
+/// bridge, the per-platform adapters, and the frame script that picks a Kakao
+/// result. `MirrorSession` decides when each one runs.
+///
+/// The adapters were written against the mirror, which was captured from the
+/// live pages, so they find fields by what the live page itself carries —
+/// `name` attributes, section ids, row headings, ARIA roles. Nothing here may
+/// depend on the `data-mirror*` / `data-flr*` markup the mirror adds on top.
 library;
+
+import 'dart:convert';
+
+import 'fields.dart';
+
+/// Answers `true` once the platform's listing form has rendered its own
+/// fields. The live forms draw themselves after the page load finishes (직방 is
+/// Next.js, 다방프로 a single-page app), so the adapter waits for this first.
+/// 어댑터가 **이제 사진을 붙여도 된다**고 세우는 표식. 세 어댑터가 모두 시작할 때
+/// 내리고 끝날 때(오류로 빠져나온 길에서도) 세운다.
+///
+/// 다방·당근은 제 차례를 다 마친 뒤에 세운다. 직방은 주소 검색 **직전에** 세우고
+/// [photosDoneFlag] 를 기다린다 — 사진 창이 떠 있는 동안은 주소를 고를 수 없어서다.
+const formDoneFlag = 'window.__flrFormDone';
+
+/// 사진 첨부가 끝났다고 네이티브가 세워 주는 표식. 직방 어댑터만 이것을 기다린다.
+const photosDoneFlag = 'window.__flrPhotosDone';
+
+/// 표식이 설 때까지 기다린다. 섰으면 `true`, 시간이 다했거나 [isCancelled] 가
+/// 끊었으면 `false`.
+///
+/// **왜 필요한가** — [WebViewController.runJavaScript] 는 async 어댑터의 *첫
+/// await 에서* 돌아온다. 그래서 이것이 없으면 사진 첨부가 폼 입력과 나란히 돈다.
+/// 다방은 주소를 고르는 순간 폼을 처음 상태로 되돌리므로(2026-09-20 실측), 그
+/// 되돌림이 방금 올라간 사진 카드를 함께 쓸어 간다. 값은 어댑터의 `reconcile` 이
+/// 다시 넣지만 **사진은 아무도 다시 붙여 주지 않는다.**
+///
+/// 끝내 말이 없어도 [false] 로 돌아가 사진을 붙여 본다 — 못 붙이는 것보다 낫고,
+/// 그래도 지워지면 `transferListingPhotos` 가 한 번 더 붙인다.
+Future<bool> awaitFormAdapter({
+  required Future<Object> Function(String script) evaluate,
+  required Duration timeout,
+  bool Function()? isCancelled,
+  Duration poll = const Duration(milliseconds: 300),
+}) async {
+  final watch = Stopwatch()..start();
+  while (isCancelled?.call() != true) {
+    try {
+      final done = await evaluate('$formDoneFlag === true');
+      if (done == true || done.toString() == 'true') return true;
+    } catch (_) {
+      // 페이지가 넘어가는 중이면 아무 답이 없다. 다시 묻는다.
+    }
+    if (watch.elapsed >= timeout) return false;
+    await Future<void>.delayed(poll);
+  }
+  return false;
+}
+
+String formReadyScript(ListingPlatform platform) {
+  final selector = switch (platform) {
+    ListingPlatform.zigbang => '[name="sizeM2"], [name="title"]',
+    ListingPlatform.dabang => '#room_info th, #trade_info th',
+    ListingPlatform.daangn => '#image-upload',
+  };
+  return '!!document.querySelector(${jsonEncode(selector)})';
+}
 
 String postcodeBridgeScript(String query) =>
     '''
@@ -140,6 +202,8 @@ String zigbangInjectionScript(String payload) =>
 
 (async () => {
   const data = $payload;
+  window.__flrFormDone = false;
+  window.__flrPhotosDone = false;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const output = {applied: 0, missing: [], unsupported: [], verified: 0, violations: []};
   // These names were read from the published mirror form. Never rely on its
@@ -167,8 +231,7 @@ String zigbangInjectionScript(String payload) =>
     heating: '난방 방식: 직방 원룸 폼에 입력란이 없습니다.',
     lh: 'LH 전세임대 여부: 직방 원룸 폼에 입력란이 없습니다.',
     rooms: '방 개수: 직방 원룸 폼은 방 구조로 방 수를 정하며 별도 방 개수 입력란이 없습니다.',
-    unknownFeeReason: '확인 불가 법정 사유: 직방 원룸 미러의 관리비 방식에는 확인 불가 분기가 없습니다.',
-    photoCount: '사진: 직방 미러는 아직 사진 첨부 기능을 지원하지 않습니다. 통합 폼에서 선택한 사진은 다방·당근 미러에 자동 첨부할 수 있습니다.'
+    unknownFeeReason: '확인 불가 법정 사유: 직방 원룸 폼의 관리비 방식에는 확인 불가 분기가 없습니다.'
   };
   const esc = s => (window.CSS && CSS.escape) ? CSS.escape(String(s)) : String(s).replace(/[^a-zA-Z0-9_-]/g, '\\\\\$&');
   const find = name => document.querySelector('[name="' + esc(name) + '"], #' + esc(name) + ', [data-flr-key="' + esc(name) + '"]');
@@ -286,7 +349,7 @@ String zigbangInjectionScript(String payload) =>
   // true 를 준다. 그래서 「입력됨」은 곧 「확인됨」이다.
   const mark = (key, ok) => {
     if (ok) { output.applied++; output.verified++; }
-    else output.missing.push(key + ': 미러의 대상 DOM을 찾거나 선택하지 못했습니다.');
+    else output.missing.push(key + ': 폼에서 대상 입력란을 찾거나 선택하지 못했습니다.');
   };
   const note = message => { if (!output.unsupported.includes(message)) output.unsupported.push(message); };
   const publish = () => window.ListingResult.postMessage(JSON.stringify(output));
@@ -338,7 +401,7 @@ String zigbangInjectionScript(String payload) =>
     mark('shortTerm', await check('isShortTerm', data.shortTerm === true));
     if (data.loan === '없음') mark('loan', await clickText('noLoan', '융자금 없음'));
     else if (data.loan === '30%이하' || data.loan === '융자금 30%이하') mark('loan', await clickText('loanUnder30', '융자금 30%이하'));
-    else if (data.loan !== undefined && data.loan !== null && data.loan !== '') output.unsupported.push('융자금 ' + data.loan + ': 직방 원룸 미러는 융자금 없음 또는 30% 이하만 선택할 수 있어 임의 금액을 자동 변환하지 않았습니다.');
+    else if (data.loan !== undefined && data.loan !== null && data.loan !== '') output.unsupported.push('융자금 ' + data.loan + ': 직방 원룸 폼는 융자금 없음 또는 30% 이하만 선택할 수 있어 임의 금액을 자동 변환하지 않았습니다.');
     mark('noManagementFee', await check('no-manage-cost', data.noManagementFee === true));
     if (data.noManagementFee !== true) { mark('manageMethod', await clickLabel('관리비 부과 방식', data.manageMethod === '기타 부과' ? '기타' : data.manageMethod)); await sleep(400); }
     if (data.manageMethod === '정액 관리비' && data.noManagementFee !== true) { mark('manageBasis', await choose(names.manageBasis, ({'3개월 평균 관리비':'최근 3개월 관리비 평균','1년 평균 관리비':'최근 1년 관리비 평균','기타 직접 입력':'직접 입력'})[data.manageBasis] || data.manageBasis)); input('managementFee', data.managementFee, v => String(Number(v) * 10000)); }
@@ -369,7 +432,7 @@ String zigbangInjectionScript(String payload) =>
         if (!source) continue;
         const masterValue = data.manageDetail[detailKeys[source]];
         if (!masterValue) {
-          output.unsupported.push('관리비 세부 ' + detailKeys[source] + ': 통합 폼 값이 없어 미러에 입력하지 않았습니다.');
+          output.unsupported.push('관리비 세부 ' + detailKeys[source] + ': 통합 폼 값이 없어 입력하지 않았습니다.');
           continue;
         }
         mark('manageDetail.' + detailKeys[source], await choose(el.name, masterValue));
@@ -386,12 +449,27 @@ String zigbangInjectionScript(String payload) =>
     mark('loanAvailable', await check('itemConditions.loanLease', data.loanAvailable === '가능')); mark('petAllowed', await check('itemConditions.pet', data.petAllowed === '가능'));
     const optionLabel = [...document.querySelectorAll('label')].find(label => label.textContent.trim() === '옵션');
     const optionScope = optionLabel?.parentElement?.parentElement || document;
-    for (const option of (data.appliances || [])) { const button = [...optionScope.querySelectorAll('button')].find(b => b.textContent.trim() === option); if (button) { press(button); if (await waitFor(() => selectedButton(button))) { output.applied++; output.verified++; } else output.missing.push('appliances.' + option + ': 미러에서 선택 상태를 확인하지 못했습니다.'); } else output.unsupported.push('가전·가구 옵션 ' + option + ': 직방 원룸 미러에 대응 옵션이 없습니다.'); }
-    const conditionIds = {'CCTV':'itemConditions.cctv','테라스':'itemConditions.terrace','전기차 충전시설':'itemConditions.evStation'}; for (const item of (data.facilities || [])) { if (conditionIds[item]) { if (await check(conditionIds[item], true)) { output.applied++; output.verified++; } else output.missing.push('facilities.' + item + ': 미러에서 선택 상태를 확인하지 못했습니다.'); } else output.unsupported.push('보안 및 시설 옵션 ' + item + ': 직방 원룸 미러에 대응 옵션이 없습니다.'); }
-    if (data.moveInType === '즉시 입주') mark('moveInType', await check('moveInImmediately', true)); else if (data.moveInType === '날짜 지정') { mark('moveInType', await check('moveInImmediately', false)); input('moveInDate', data.moveInDate); } else output.unsupported.push('입주 방식 협의 가능: 직방 원룸 미러는 즉시 입주 또는 날짜 선택만 지원합니다.');
+    for (const option of (data.appliances || [])) { const button = [...optionScope.querySelectorAll('button')].find(b => b.textContent.trim() === option); if (button) { press(button); if (await waitFor(() => selectedButton(button))) { output.applied++; output.verified++; } else output.missing.push('appliances.' + option + ': 폼에서 선택 상태를 확인하지 못했습니다.'); } else output.unsupported.push('가전·가구 옵션 ' + option + ': 직방 원룸 폼에 대응 옵션이 없습니다.'); }
+    const conditionIds = {'CCTV':'itemConditions.cctv','테라스':'itemConditions.terrace','전기차 충전시설':'itemConditions.evStation'}; for (const item of (data.facilities || [])) { if (conditionIds[item]) { if (await check(conditionIds[item], true)) { output.applied++; output.verified++; } else output.missing.push('facilities.' + item + ': 폼에서 선택 상태를 확인하지 못했습니다.'); } else output.unsupported.push('보안 및 시설 옵션 ' + item + ': 직방 원룸 폼에 대응 옵션이 없습니다.'); }
+    if (data.moveInType === '즉시 입주') mark('moveInType', await check('moveInImmediately', true)); else if (data.moveInType === '날짜 지정') { mark('moveInType', await check('moveInImmediately', false)); input('moveInDate', data.moveInDate); } else output.unsupported.push('입주 방식 협의 가능: 직방 원룸 폼는 즉시 입주 또는 날짜 선택만 지원합니다.');
     if (data.moveInNegotiable === true) input('moveInNegotiable', '협의 가능');
     input('title', data.title); input('description', data.description); input('privateMemo', data.privateMemo); input('ownerPhone', data.ownerPhone);
     for (const message of (window.__flrPostcode ? window.__flrPostcode.notes : [])) note(message);
+
+    /* 사진이 먼저다.
+     *
+     * 직방은 사진을 「이미지 넣기」 창 안에서 받는데, Radix 창이 열려 있는 동안은
+     * <body> 의 포인터가 막힌다 — 그 위에 주소 검색 겹을 띄워 두면 사람이 주소를
+     * 고를 수 없다. 그래서 여기서 표식을 세워 사진을 부르고, 사진이 끝났다는 말을
+     * 들은 뒤에 주소 검색을 띄운다([MirrorSession._transferPhotos] 가 알려 준다).
+     *
+     * 사진이 없으면 기다리지 않는다. 끝내 말이 없어도 5분이면 주소로 넘어간다 —
+     * 주소를 영영 못 고르는 것보다 낫다. */
+    if (Number(data.photoCount) > 0) {
+      window.__flrFormDone = true;
+      const until = Date.now() + 300000;
+      while (window.__flrPhotosDone !== true && Date.now() < until) await sleep(250);
+    }
 
     // 주소 — 직방 미러는 주소 칸을 누르면 카카오 우편번호 창을 띄운다. 브리지가 그 창을
     // 웹뷰 안 전체 화면 겹으로 바꿔 놓았으므로, 여기서 눌러 주면 사용자가 결과만 고르면 된다.
@@ -404,7 +482,7 @@ String zigbangInjectionScript(String payload) =>
         if (!window.__flrZigbangAddressWatch) {
           const multiUnit = data.propertyType === '다가구주택' ? '예' : '아니요';
           window.__flrZigbangAddressWatch = new MutationObserver(() => {
-            const dialog = [...document.querySelectorAll('[data-mirror="modal"] [role="dialog"]')]
+            const dialog = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')]
                 .find(box => box.textContent.includes('소재지 공개 확인'));
             if (!dialog) return;
             const answer = [...dialog.querySelectorAll('button')]
@@ -428,6 +506,9 @@ String zigbangInjectionScript(String payload) =>
       output.violations.push('깐깐이 위반: ' + detail);
     }
   } catch (error) { output.violations.push('자동 입력 오류: ' + String(error)); }
+  // 표식은 어댑터 셋이 같은 약속을 지킨다 ([MirrorSession._adapterDone]). 직방은 위에서
+  // 이미 세웠을 수 있으나, 오류로 빠져나온 길에서도 사진은 붙는 편이 낫다.
+  window.__flrFormDone = true;
   window.ListingResult.postMessage(JSON.stringify(output));
 })();
 ''';
@@ -436,6 +517,9 @@ String dabangInjectionScript(String payload) =>
     '''
 (async () => {
   const data = $payload;
+  // 사진은 폼이 다 채워진 뒤에 붙는다. 시작할 때 내려 두지 않으면 앞선 시도가 세워 둔
+  // 표식을 보고 사진이 폼 입력과 나란히 달린다.
+  window.__flrFormDone = false;
   const output = {applied: 0, missing: [], unsupported: [], verified: 0, violations: []};
   const publish = () => window.ListingResult.postMessage(JSON.stringify(output));
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -534,7 +618,39 @@ String dabangInjectionScript(String payload) =>
     return el && !el.disabled ? el : null;
   }, timeout);
 
-  const fill = (key, locate, value, transform = v => v) => {
+  /* ── 되돌림 대비 ─────────────────────────────────────────────
+   * **주소를 고르면 다방은 폼을 처음 상태로 되돌린다** (실물 실측 2026-09-20: 제목에
+   * 손으로 친 글자까지 사라졌다 — 주소와 섹션이 다른데도). 넣은 값은 넣는 그 순간에만
+   * 맞고 나중에 통째로 없어지므로, 그 자리에서 되읽어 본 「검증」은 오래가는 약속이 아니다.
+   *
+   * 그래서 성공한 조작마다 **다시 재는 법과 다시 넣는 법**을 함께 적어 두고, 끝에서
+   * ([reconcile]) 한 번 더 맞춘다. 주소를 앞으로 당겨도 이 그물은 걷지 않는다 — 폼을
+   * 되돌리는 것이 주소뿐이라는 보장이 없고, 숫자가 진실이려면 마지막에 본 것이어야 한다. */
+  const replay = [];
+  let replaying = false;
+  /// [reconcile] 이 지금까지 「검증」에서 빼 둔 개수. 여러 번 불려도 같은 항목을 거듭
+  /// 빼지 않기 위해 기억한다.
+  let deducted = 0;
+  /// 본 차례가 끝났는가. 끝난 뒤에 도착하는 되돌림은 [watchAddress] 가 맞춘다.
+  let settled = false;
+  /// 창(모달) 안의 칸은 **적어 두지 않는다.** 「월 관리비 상세입력」처럼 값을 받고
+  /// 닫히는 창은 닫히는 순간 칸이 사라지므로, 다시 재면 늘 「없어졌다」로 읽힌다 —
+  /// 저장된 것을 잃었다고 말하고, 있지도 않은 칸에 다시 넣으려 든다.
+  const inModal = el => !!(el && el.closest && el.closest('#modal-container'));
+  const remember = (key, el, check, redo) => {
+    if (replaying || inModal(el)) return;
+    replay.push({key, check, redo});
+  };
+  const holds = item => { try { return !!item.check(); } catch (_) { return false; } };
+
+  /// 폼이 스스로 모양을 다듬는 칸은 **숫자만 같으면 같은 값이다.** 실물 다방의
+  /// 사용승인일 칸은 넣은 `20250301` 을 제 형식으로 고쳐 되돌려 주어, 글자 그대로
+  /// 견주면 넣고도 실패로 읽혔다(2026-09-20 실측).
+  const digits = value => String(value).replace(/[^0-9]/g, '');
+  const sameDigits = (got, wanted) => !!digits(wanted) && digits(got) === digits(wanted);
+  const sameText = (got, wanted) => got === wanted;
+
+  const fill = (key, locate, value, transform = v => v, same = sameText) => {
     if (!filled(value)) return false;
     const el = at(locate);
     if (!el) { miss(key, '다방 폼에서 입력란을 찾지 못했습니다.'); return false; }
@@ -542,9 +658,17 @@ String dabangInjectionScript(String payload) =>
     const wanted = String(transform(value));
     setNative(el, wanted);
     const again = at(locate) || el;
-    if (String(again.value) === wanted) { ok(); return true; }
+    if (same(String(again.value), wanted)) {
+      ok();
+      remember(key, again,
+        () => { const now = at(locate); return !!now && same(String(now.value), wanted); },
+        () => { const now = at(locate); if (now && !now.disabled) setNative(now, wanted); });
+      return true;
+    }
     output.applied++;
-    miss(key, '값을 넣었지만 폼에서 같은 값을 다시 읽지 못했습니다.');
+    // 무엇으로 읽혔는지 함께 적는다. 「같은 값을 못 읽었다」만으로는 폼이 형식을 고친
+    // 것인지 값을 버린 것인지 알 수 없어, 실물에서 한 번 더 재 봐야만 했다.
+    miss(key, '넣은 값은 「' + wanted + '」인데 폼은 「' + String(again.value).slice(0, 40) + '」로 읽습니다.');
     return false;
   };
 
@@ -567,7 +691,11 @@ String dabangInjectionScript(String payload) =>
     const value = option.value;
     setNative(el, value);
     if (await waitUntil(() => { const now = at(locate); return now && now.value === value; }, 1200)) {
-      ok(); await sleep(REACT); return true;
+      ok();
+      remember(key, el,
+        () => { const now = at(locate); return !!now && now.value === value; },
+        () => { const now = at(locate); if (now && !now.disabled) setNative(now, value); });
+      await sleep(REACT); return true;
     }
     output.applied++;
     miss(key, '고른 뒤 폼에서 같은 값을 다시 읽지 못했습니다.');
@@ -583,10 +711,15 @@ String dabangInjectionScript(String payload) =>
         : '다방 폼에서 ' + (label || '선택지') + '을(를) 찾지 못했습니다.');
       return false;
     }
-    if (el.checked === wanted) { ok(); return true; }
+    const keep = () => {
+      remember(key, el,
+        () => { const now = at(locate); return !!now && now.checked === wanted; },
+        () => { const now = at(locate); if (now && !now.disabled && now.checked !== wanted) press(now); });
+    };
+    if (el.checked === wanted) { ok(); keep(); return true; }
     press(el);
     if (await waitUntil(() => { const now = at(locate); return now && now.checked === wanted; }, 2000)) {
-      ok(); await sleep(REACT); return true;
+      ok(); keep(); await sleep(REACT); return true;
     }
     output.applied++;
     miss(key, (label || '선택지') + '을(를) 눌렀지만 선택 상태가 바뀌지 않았습니다.');
@@ -597,6 +730,42 @@ String dabangInjectionScript(String payload) =>
     const target = mapped === undefined ? wanted : mapped;
     if (target === null) return false;
     return toggle(key, () => labelInput(at(scope), target), true, target);
+  };
+
+  /* 넣어 둔 것을 전부 다시 재고, 없어진 것은 다시 넣는다.
+   *
+   * 다시 넣는 일이 또 다른 행을 되돌릴 수 있어(매물유형을 다시 고르면 7행이 다시
+   * 그려진다) 잠잠해질 때까지 몇 번 돈다. 끝내 붙지 않는 것만 「확인할 항목」에 남긴다.
+   * [output.verified] 는 **마지막에 본 것**으로 고쳐 적는다 — 넣던 순간의 숫자는
+   * 사람에게 거짓말이 된다. */
+  const reconcile = async () => {
+    if (!replay.length) return;
+    replaying = true;
+    for (let round = 0; round < 3; round++) {
+      const lost = replay.filter(item => !holds(item));
+      if (!lost.length) break;
+      for (const item of lost) {
+        try { await item.redo(); } catch (_) { /* 다음 바퀴에서 다시 만난다 */ }
+      }
+      await sleep(REACT);
+    }
+    replaying = false;
+    const stuck = replay.filter(item => !holds(item));
+    // 「검증」에서 **끝내 안 남은 것만** 뺀다. 처음부터 다시 세면 창 안에서 받고 닫힌
+    // 관리비처럼 [replay] 에 없는 성공까지 사라져, 숫자가 정직해지는 게 아니라 인색해진다.
+    //
+    // [watchAddress] 가 이것을 여러 번 부르므로 **뺀 만큼을 기억했다가 되돌린 뒤** 다시
+    // 뺀다. 그러지 않으면 부를 때마다 같은 항목을 또 빼서 검증 숫자가 0까지 내려간다.
+    output.verified = Math.max(0, output.verified + deducted - stuck.length);
+    deducted = stuck.length;
+    // 되돌림이 또 오면 이 자리도 다시 지나간다 — 같은 말을 두 번 적지 않는다.
+    for (let i = output.missing.length - 1; i >= 0; i--) {
+      if (/: 넣은 값이 폼에서 사라져/.test(output.missing[i])) output.missing.splice(i, 1);
+    }
+    for (const item of stuck) {
+      miss(item.key, '넣은 값이 폼에서 사라져 다시 넣었지만 남지 않았습니다.');
+    }
+    publish();
   };
 
   const modal = title => {
@@ -620,7 +789,7 @@ String dabangInjectionScript(String payload) =>
       const keep = modalButton(ledger, '아니요, 직접 입력할게요') || modalButton(ledger, '닫기');
       if (keep) {
         press(keep);
-        note('건축물대장 자동 조회: 이미 입력한 면적·용도·승인일이 공공데이터 값으로 덮어써지지 않도록 「직접 입력」으로 닫았습니다.');
+        note('건축물대장 자동 조회: 면적·용도·승인일이 공공데이터 값으로 덮어써지지 않도록 「직접 입력」으로 닫았습니다. 세 항목은 통합 폼의 값으로 채웁니다.');
       }
     }
     const dong = cell.querySelector('input[name="dong"]');
@@ -635,18 +804,63 @@ String dabangInjectionScript(String payload) =>
         if (/^(매물 기본 주소|동 정보|호수 정보):/.test(bucket[i])) bucket.splice(i, 1);
       }
     }
-    fill('building', dong, data.building);
-    fill('unit', ho, data.unit);
+    // 자리는 노드가 아니라 함수로 넘긴다 — 폼이 다시 그려지면 붙잡아 둔 노드는 유령이
+    // 되고, [reconcile] 이 그 유령에게 값을 물어 「멀쩡하다」고 속는다.
+    const addressInput = name => () => {
+      const now = addressCell();
+      return now ? now.querySelector('input[name="' + name + '"]') : null;
+    };
+    fill('building', addressInput('dong'), data.building);
+    fill('unit', addressInput('ho'), data.unit);
     output.applied++;
     output.verified++;
     publish();
   };
+  /* 사진을 붙이는 동안에는 폼을 건드리지 않는다.
+   *
+   * [reconcile] 은 없어진 값을 다시 넣는데, 매물유형을 다시 누르면 매물 정보·추가 정보
+   * 7행이 통째로 다시 그려진다. 그 다시 그리기가 **방금 올라간 사진 카드를 쓸어 간다.**
+   * 사진 카드가 생기고 사라지는 것 자체도 body 의 변화라, 막지 않으면 사진이 제가
+   * 저를 지우게 만드는 셈이 된다. `until` 은 사진 다리(lib/photo_transfer.dart)가
+   * 부를 때마다 앞으로 밀리고 끝나면 0 이 되므로, 전송이 죽어도 여기서 영원히 멈추지
+   * 않는다. */
+  const photoBusy = () => !!window.__flrPhotos && Date.now() < (window.__flrPhotos.until || 0);
+  const photoArea = () => document.getElementById('visual_info');
   const watchAddress = () => {
     if (window.__flrDabangAddressWatch) return;
-    window.__flrDabangAddressWatch = new MutationObserver(() => afterAddressPicked());
+    window.__flrDabangAddressWatch = new MutationObserver(records => {
+      if (photoBusy()) return;
+      const spot = photoArea();
+      if (spot && records.every(record => spot.contains(record.target))) return;
+      afterAddressPicked();
+      // 본 차례가 이미 끝난 뒤에 주소가 도착했다면, 그 되돌림을 맞출 사람이 없다.
+      if (settled && !replaying) { settled = false; reconcile().then(() => { settled = true; }); }
+    });
     window.__flrDabangAddressWatch.observe(document.body, {
       subtree: true, childList: true, attributes: true, attributeFilter: ['disabled'],
     });
+  };
+
+  /// 카카오 주소 화면을 띄우고 주소가 앉을 때까지 기다린다. 앉았는지는 동·호 칸이
+  /// 열렸는지로 안다 — 다방이 주소를 받아들였을 때만 풀리는 자물쇠다.
+  const pickAddress = async () => {
+    const cell = addressCell();
+    const search = cell && [...cell.querySelectorAll('button')].find(button => norm(text(button)) === '검색');
+    if (!search) { miss('address', '매물 주소의 「검색」 버튼을 찾지 못했습니다.'); return false; }
+    press(search);
+    const landed = await waitUntil(() => {
+      const now = addressCell();
+      const dong = now && now.querySelector('input[name="dong"]');
+      return dong && !dong.disabled ? dong : null;
+    }, 60000);
+    afterAddressPicked();
+    if (!landed) {
+      note('매물 기본 주소: 카카오 주소 검색을 띄웠지만 주소가 확정되지 않아 나머지를 먼저 채웠습니다. '
+        + '결과를 직접 눌러 주시면 주소·동·호가 채워지고, 주소 때문에 지워진 값은 한방이 다시 넣습니다.');
+      return false;
+    }
+    await sleep(REACT);
+    return true;
   };
 
   /* ── 월 관리비 상세입력 창 ─────────────────────────────────── */
@@ -687,7 +901,8 @@ String dabangInjectionScript(String payload) =>
         else if (filled(data.manageBasis)) note('관리비 부과 기준 ' + data.manageBasis + ': 다방 상세입력 창에 대응하는 기준이 없습니다.');
       }
       if (method === '기타부과' && filled(data.otherFeeReason)) {
-        await select('otherFeeReason', () => box.querySelector('[data-mirror-group="feeKind"] select'), {
+        await select('otherFeeReason', () => [...box.querySelectorAll('select')]
+            .find(el => [...el.options].some(option => option.textContent.includes('관리규약 등에 따라 부과'))), {
           '관리규약에 따라 부과': '관리규약 등에 따라 부과',
           '면적 및 세대별 부과': '공용 관리비는 면적/세대별로 부과하고 사용료는 사용량에 따른 부과',
           '전체 세대 균등 부과': '전체 사용량을 세대수로 나누어 부과',
@@ -755,6 +970,16 @@ String dabangInjectionScript(String payload) =>
       await waitUntil(() => (major === '주택') === isHouse(), 3000);
       await sleep(REACT);
     }
+    // 주소가 폼을 되돌리면 대분류부터 풀린다. 그러면 뒤의 값들은 있을 자리가 없으므로
+    // 이것을 가장 먼저 적어 둔다 — [reconcile] 은 적어 둔 순서대로 되돌린다.
+    remember('propertyType', button,
+      () => (major === '주택') === isHouse(),
+      async () => {
+        const again = majorButton();
+        if (!again) return;
+        press(again);
+        await waitUntil(() => (major === '주택') === isHouse(), 3000);
+      });
     if (!minor) {
       complexProperty = true;
       ok();
@@ -853,17 +1078,28 @@ String dabangInjectionScript(String payload) =>
     // ① 매물유형 — 대분류를 바꾸면 매물 정보 7행이 통째로 다시 그려지므로 가장 먼저.
     await applyPropertyType();
 
-    // ② 주소 — 검색어만 미리 넣고, 결과 선택은 마지막에 띄우는 카카오 화면에서 받는다.
+    /* ② 주소 — **여기서 끝까지 받는다.**
+     *
+     * 예전에는 검색어만 넣어 두고 카카오 화면은 맨 마지막(⑱)에 띄웠다. 전체 화면 겹이
+     * 다른 입력을 가리기 때문이었는데, 그 대가가 컸다: 주소를 고르는 순간 다방이 폼을
+     * 처음 상태로 되돌려 그때까지 채운 것이 **전부** 사라졌다(실물 실측 2026-09-20 —
+     * 43건을 넣고 41건을 되읽어 확인했는데 사람 눈에는 주소와 동·호만 남았다).
+     * 되돌리는 쪽을 먼저 지나가면 뒤의 값들이 살아남는다.
+     *
+     * 사람이 직접 고를 수도 있어 넉넉히 기다리되, 흐름 전체의 3분을 다 쓰지는 않는다.
+     * 끝내 안 오면 멈추지 않고 나머지를 채운다 — 늦게 도착하는 주소는 [watchAddress] 가
+     * 듣고, 그때 [reconcile] 이 다시 맞춘다. */
     if (complexProperty) {
       await enterComplexAddress(PROPERTY[data.propertyType][0]);
-    } else {
+      afterAddressPicked();
+    } else if (filled(data.address)) {
       const keyword = addressCell() && addressCell().querySelector('input[name="keyword"]');
-      if (filled(data.address) && keyword) {
+      if (keyword) {
         setNative(keyword, data.address);
         if (keyword.value === String(data.address)) output.applied++;
       }
+      await pickAddress();
     }
-    afterAddressPicked();
 
     // ③ 면적 — 평/㎡ 두 칸이 짝이다. ㎡ 칸에 넣으면 미러가 평을 계산한다.
     const sizeCell = () => cellOf('room_info', '매물 크기');
@@ -881,7 +1117,9 @@ String dabangInjectionScript(String payload) =>
     };
     await select('buildingUse', pick('room_info', '건축물용도', 'select'), data.buildingUse);
     await select('approvalDateType', pick('room_info', '건축물승인', 'select'), '사용승인일');
-    fill('approvalDate', pick('room_info', '건축물승인', 'input[type="text"]'), data.approvalDate, v => String(v).replace(/-/g, ''));
+    // 실물은 넣은 날짜를 제 형식으로 고쳐 되돌려 준다 — 숫자만 같으면 들어간 것이다.
+    fill('approvalDate', pick('room_info', '건축물승인', 'input[type="text"]'),
+      data.approvalDate, v => String(v).replace(/-/g, ''), sameDigits);
 
     // ⑤ 방 정보 — 방 수를 넣어야 방 거실 형태·방 특징이 켜진다.
     // 방 수를 넣으면 미러가 이 행을 통째로 다시 그린다 — 뒤의 자리는 반드시 새로 찾는다.
@@ -1032,18 +1270,18 @@ String dabangInjectionScript(String payload) =>
     if (data.singleBuilding === true) note('단일동 여부: 다방은 「등기부등본 상에 동 정보가 없을 경우」 체크만 제공하며 주소를 고른 뒤에 켜집니다.');
     for (const message of (window.__flrPostcode ? window.__flrPostcode.notes : [])) note(message);
 
-    // ⑱ 마지막에 주소 검색 화면을 띄운다 — 전체 화면 겹이라 다른 입력을 가린다.
-    if (filled(data.address) && !complexProperty) {
-      const cell = addressCell();
-      const search = cell && [...cell.querySelectorAll('button')].find(button => norm(text(button)) === '검색');
-      if (search) {
-        note('매물 기본 주소: 카카오 주소 검색을 띄웠습니다. 자동으로 고르지 못하면 결과를 직접 눌러 주세요. 고르면 주소·동·호가 채워집니다.');
-        press(search);
-      } else miss('address', '매물 주소의 「검색」 버튼을 찾지 못했습니다.');
-    }
+    // ⑱ 마지막 대조 — 주소(②)나 그 밖의 무엇이 폼을 되돌렸다면 여기서 드러나고,
+    // 여기서 다시 채워진다. 「검증」 숫자도 여기서 본 것으로 고쳐 적는다.
+    await reconcile();
+    settled = true;
   } catch (error) {
     output.violations.push('다방 자동 입력 오류: ' + String(error && error.stack ? error.stack : error));
   }
+  /* 여기서부터 폼은 조용하다 — **사진은 이제 붙여도 된다.**
+   *
+   * 오류로 빠져나온 길에도 세운다. 반쯤 채워진 폼이라도 사진은 붙는 편이 낫고,
+   * 세우지 않으면 [MirrorSession._adapterDone] 이 3분을 기다린 뒤에야 움직인다. */
+  window.__flrFormDone = true;
   for (const violation of (window.__FLR_VIOLATIONS__ || [])) {
     const detail = typeof violation === 'string' ? violation
       : [violation.kind, violation.target, violation.detail].filter(Boolean).join(' · ');
@@ -1058,6 +1296,7 @@ String daangnInjectionScript(String payload) =>
     '''
 (async () => {
   const data = $payload;
+  window.__flrFormDone = false;
 $_daangnAdapterBody''';
 
 const _daangnAdapterBody = r'''
@@ -1671,6 +1910,8 @@ const _daangnAdapterBody = r'''
   } catch (error) {
     output.violations.push('당근 자동 입력 오류: ' + String(error && error.stack ? error.stack : error));
   }
+  // 폼은 여기서 조용해진다 — 사진은 이제 붙여도 된다 ([MirrorSession._adapterDone]).
+  window.__flrFormDone = true;
   for (const violation of (window.__FLR_VIOLATIONS__ || [])) {
     const detail = typeof violation === 'string' ? violation
       : [violation.kind, violation.target, violation.detail].filter(Boolean).join(' · ');

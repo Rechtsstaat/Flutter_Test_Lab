@@ -20,10 +20,14 @@ class ListingDetailPage extends StatefulWidget {
     super.key,
     required this.store,
     required this.listingId,
+    this.guarded = guardLiveAds,
   });
 
   final AppStore store;
   final String listingId;
+
+  /// 광고 종료로 가는 길을 닫아 둘 것인가 ([guardLiveAds]).
+  final bool guarded;
 
   @override
   State<ListingDetailPage> createState() => _ListingDetailPageState();
@@ -53,6 +57,8 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
   );
 
   Future<void> _end(Listing listing) async {
+    // 빗장이 걸려 있으면 버튼도 없지만, 여기로 오는 다른 길이 생기더라도 닫혀 있게 둔다.
+    if (widget.guarded) return;
     final picked = await showModalBottomSheet<Set<ListingPlatform>>(
       context: context,
       isScrollControlled: true,
@@ -136,12 +142,19 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
                   ],
                   if (canEnd) ...[
                     const SizedBox(height: Space.s24),
-                    BrandButton(
-                      '광고를 종료할래요',
-                      kind: BrandButtonKind.outlined,
-                      foreground: AppColor.statusError,
-                      onPressed: () => _end(listing),
-                    ),
+                    if (widget.guarded)
+                      // 빗장을 말없이 걸면 「버튼이 사라졌다」가 된다. 왜 없는지 적어 둔다.
+                      const Text(
+                        '광고 종료는 지금 잠겨 있어요 — 실제 계정으로 폼 입력을 확인하는 중입니다.',
+                        style: AppText.caption,
+                      )
+                    else
+                      BrandButton(
+                        '광고를 종료할래요',
+                        kind: BrandButtonKind.outlined,
+                        foreground: AppColor.statusError,
+                        onPressed: () => _end(listing),
+                      ),
                   ],
                 ],
               ),

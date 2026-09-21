@@ -48,6 +48,7 @@ class PublishFlowPage extends StatefulWidget {
     required this.channels,
     this.store,
     this.remotePageBuilder,
+    this.guarded = guardLiveAds,
   });
 
   final Listing listing;
@@ -56,6 +57,9 @@ class PublishFlowPage extends StatefulWidget {
   final List<ListingPlatform> channels;
   final AppStore? store;
   final RemotePageBuilder? remotePageBuilder;
+
+  /// 광고 목록으로 가는 길을 닫아 둘 것인가 ([guardLiveAds]).
+  final bool guarded;
 
   @override
   State<PublishFlowPage> createState() => _PublishFlowPageState();
@@ -186,6 +190,8 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
   });
 
   void _showListings(ListingPlatform platform) {
+    // 빗장이 걸려 있으면 버튼도 없지만, 여기로 오는 다른 길이 생기더라도 닫혀 있게 둔다.
+    if (widget.guarded) return;
     _listingPages.putIfAbsent(
       platform,
       () =>
@@ -271,9 +277,9 @@ class _PublishFlowPageState extends State<PublishFlowPage> {
         mark: RowMark.done,
         name: name,
         status: '등록 완료',
-        action: '등록된 광고 보기',
-        actionIcon: Icons.north_east_rounded,
-        onAction: () => _showListings(platform),
+        action: widget.guarded ? null : '등록된 광고 보기',
+        actionIcon: widget.guarded ? null : Icons.north_east_rounded,
+        onAction: widget.guarded ? null : () => _showListings(platform),
         subline: date == null ? null : '등록일: ${formatDate(date)}',
       ),
       ChannelState.working => ChannelRow(

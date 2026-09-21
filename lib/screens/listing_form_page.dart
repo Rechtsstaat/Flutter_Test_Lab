@@ -327,7 +327,14 @@ class _ListingFormPageState extends State<ListingFormPage> {
     ]) {
       if (_blank(key)) violations.add(_label(key));
     }
-    if (photos.length > 20) violations.add('매물 사진은 최대 20장');
+    /* 사진은 **필수 5~20장**이다.
+     *
+     * 직방이 그렇게 요구한다 — 「이미지 넣기」 창이 5장을 채우기 전에는 [확인] 을
+     * 열어 주지 않는다. 통합 폼에서 5장을 못 채우면 직방 전송은 어차피 사진 없이
+     * 끝나므로, 보내기 전에 여기서 막는다. */
+    if (photos.length < minListingPhotos || photos.length > maxListingPhotos) {
+      violations.add('매물 사진 $minListingPhotos~$maxListingPhotos장');
+    }
     if (_text('title').length > 30) violations.add('매물 제목은 최대 30자');
     if (_text('description').length > 1000) {
       violations.add('매물 상세 설명은 최대 1000자');
@@ -360,6 +367,7 @@ class _ListingFormPageState extends State<ListingFormPage> {
     'loanAvailable' => '전세자금대출 가능 여부',
     'petAllowed' => '반려동물 허용',
     'moveInType' => '입주가능일',
+    'photoCount' => '매물 사진',
     'title' => '매물 제목',
     'description' => '매물 상세 설명',
     HifiField.structure => '구조',
@@ -442,12 +450,14 @@ class _ListingFormPageState extends State<ListingFormPage> {
       final selected =
           await (widget.pickImages?.call() ??
               ImagePicker().pickMultiImage(
-                limit: 20,
+                limit: maxListingPhotos,
                 requestFullMetadata: false,
               ));
       if (!mounted || selected.isEmpty) return;
-      if (photos.length + selected.length > 20) {
-        setState(() => _photoError = '사진은 최대 20장까지 올릴 수 있어요.');
+      if (photos.length + selected.length > maxListingPhotos) {
+        setState(
+          () => _photoError = '사진은 최대 $maxListingPhotos장까지 올릴 수 있어요.',
+        );
         return;
       }
       setState(() {
@@ -1048,9 +1058,11 @@ class _ListingFormPageState extends State<ListingFormPage> {
           values['photoCount'] = photos.length;
         }),
       ),
-      label: '매물 사진 (선택, 최대 20장)',
+      label: '매물 사진 (필수, $minListingPhotos~$maxListingPhotos장)',
       below: Text(
-        _photoError ?? '다방·당근 페이지에는 사진이 자동으로 첨부돼요. 직방은 아직 직접 올려야 해요.',
+        _photoError ??
+            '직방·다방 페이지에 사진이 자동으로 첨부돼요. 첫 장이 대표 사진이고, '
+            '직방은 JPG·PNG 만 장당 10MB까지 받아요.',
         style: AppText.caption.copyWith(
           color: _photoError == null ? null : AppColor.statusError,
         ),
@@ -1704,7 +1716,7 @@ class _PhotoStrip extends StatelessWidget {
         Tooltip(
           message: '사진 추가',
           child: GestureDetector(
-            onTap: picking || photos.length >= 20 ? null : onAdd,
+            onTap: picking || photos.length >= maxListingPhotos ? null : onAdd,
             child: Container(
               width: _tile,
               height: _tile,
@@ -1730,7 +1742,10 @@ class _PhotoStrip extends StatelessWidget {
                           color: AppColor.iconTertiary,
                         ),
                   const SizedBox(height: Space.s4),
-                  Text('${photos.length}/20', style: AppText.caption),
+                  Text(
+                    '${photos.length}/$maxListingPhotos',
+                    style: AppText.caption,
+                  ),
                 ],
               ),
             ),

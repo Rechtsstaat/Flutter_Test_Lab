@@ -1,0 +1,1080 @@
+{
+  "_note": "미러(/dabang/form/room/)를 dabang_form_probe.js 로 잰 기준선. 실물 계정으로 뜬 결과를 이것과 견주면 어댑터가 딛고 선 자리(섹션 id·줄 제목·라벨)가 어디서 어긋났는지 바로 보인다. 다시 뜨는 법은 dabang_form_probe.js 머리말 참고.",
+  "_measuredOn": "미러 mirror-dimension-lab.pages.dev, 1280x900, 2026-09-20",
+  "redaction": "값·체크상태 미수집 / 사람 줄의 선택지는 길이만 / 전화번호 꼴 제거",
+  "expectations": {
+    "formReady": true,
+    "sections": [
+      {
+        "id": "room_info",
+        "present": true,
+        "thCount": 6,
+        "thH1Count": 6
+      },
+      {
+        "id": "trade_info",
+        "present": true,
+        "thCount": 5,
+        "thH1Count": 5
+      },
+      {
+        "id": "visual_info",
+        "present": true,
+        "thCount": 1,
+        "thH1Count": 1
+      }
+    ],
+    "photoInput": {
+      "fileInputs": 2,
+      "matches": true,
+      "seen": [
+        {
+          "accept": "image/*",
+          "multiple": true,
+          "name": null,
+          "id": null,
+          "path": ""
+        },
+        {
+          "accept": "image/jpg, image/jpeg, image/png",
+          "multiple": false,
+          "name": null,
+          "id": null,
+          "path": ""
+        }
+      ]
+    },
+    "photoCards": 0,
+    "submitLabel": {
+      "등록 완료": true
+    }
+  },
+  "rowCount": 29,
+  "rows": [
+    {
+      "path": "root > room_info",
+      "th": "매물유형*",
+      "h1": "매물유형*",
+      "tdFollows": true,
+      "headers": [
+        "대분류"
+      ],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "button",
+          "type": "submit",
+          "text": "주택 / 빌라"
+        },
+        {
+          "tag": "button",
+          "type": "submit",
+          "text": "오피스텔원투룸에도 동시노출!"
+        },
+        {
+          "tag": "button",
+          "type": "submit",
+          "text": "아파트(도시형)"
+        }
+      ]
+    },
+    {
+      "path": "root > room_info",
+      "th": "매물 주소*",
+      "h1": "매물 주소*",
+      "tdFollows": true,
+      "headers": [
+        "주소 검색",
+        "동 입력",
+        "호 입력(선택)"
+      ],
+      "labels": [
+        "등기부등본 상에 ‘동’ 정보가 없을 경우 체크"
+      ],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "text",
+          "name": "keyword",
+          "placeholder": "예) 번동 10-1, 강북구 번동"
+        },
+        {
+          "tag": "button",
+          "type": "submit",
+          "text": "검색"
+        },
+        {
+          "tag": "input",
+          "type": "text",
+          "name": "dong",
+          "placeholder": "예) 101",
+          "disabled": true
+        },
+        {
+          "tag": "input",
+          "type": "text",
+          "name": "ho",
+          "placeholder": "예) 101",
+          "disabled": true
+        },
+        {
+          "tag": "input",
+          "type": "checkbox",
+          "disabled": true
+        },
+        {
+          "tag": "button",
+          "type": "submit",
+          "text": "주소가 검색되지 않는다면?"
+        }
+      ]
+    },
+    {
+      "path": "root > room_info",
+      "th": "매물 크기*",
+      "h1": "매물 크기*",
+      "tdFollows": true,
+      "headers": [
+        "전용면적",
+        "공급면적(선택)"
+      ],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "text",
+          "name": "room",
+          "placeholder": "평수 입력"
+        },
+        {
+          "tag": "input",
+          "type": "text",
+          "name": "room",
+          "placeholder": "㎡ 입력"
+        },
+        {
+          "tag": "input",
+          "type": "text",
+          "name": "supply",
+          "placeholder": "평수 입력"
+        },
+        {
+          "tag": "input",
+          "type": "text",
+          "name": "supply",
+          "placeholder": "㎡ 입력"
+        }
+      ]
+    },
+    {
+      "path": "root > room_info",
+      "th": "방 정보*",
+      "h1": "방 정보*",
+      "tdFollows": true,
+      "headers": [
+        "방 수",
+        "방 거실 형태",
+        "방 특징(선택)"
+      ],
+      "labels": [
+        "오픈형",
+        "분리형",
+        "신축",
+        "큰길가",
+        "반려동물"
+      ],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "text"
+        },
+        {
+          "tag": "input",
+          "type": "radio",
+          "disabled": true
+        },
+        {
+          "tag": "input",
+          "type": "radio",
+          "disabled": true
+        },
+        {
+          "tag": "input",
+          "type": "checkbox",
+          "disabled": true
+        },
+        {
+          "tag": "input",
+          "type": "checkbox",
+          "disabled": true
+        },
+        {
+          "tag": "input",
+          "type": "checkbox",
+          "disabled": true
+        }
+      ]
+    },
+    {
+      "path": "root > room_info",
+      "th": "건축물용도*",
+      "h1": "건축물용도*",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "select",
+          "type": "select-one",
+          "options": [
+            "선택",
+            "단독주택",
+            "공동주택",
+            "제1종근린생활시설",
+            "제2종근린생활시설",
+            "업무시설",
+            "숙박시설",
+            "문화 및 집회시설",
+            "종교시설",
+            "판매시설",
+            "운수시설",
+            "의료시설",
+            "교육연구시설",
+            "노유자(노인 및 어린이 시설)",
+            "수련시설",
+            "운동시설",
+            "위락시설",
+            "공장",
+            "창고시설",
+            "위험물 저장 및 처리 시설",
+            "자동차 관련 시설",
+            "동물 및 식물 관련 시설",
+            "자원순환 관련 시설",
+            "교정 및 군사 시설",
+            "방송통신시설",
+            "발전시설",
+            "묘지 관련 시설",
+            "관광 휴게시설",
+            "장례시설",
+            "야영장 시설",
+            "미등기건물",
+            "그 밖에 토지의 정착물"
+          ]
+        },
+        {
+          "tag": "button",
+          "type": "button",
+          "text": "건축물용도 가이드"
+        }
+      ]
+    },
+    {
+      "path": "root > room_info",
+      "th": "건축물승인*",
+      "h1": "건축물승인*",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "select",
+          "type": "select-one",
+          "options": [
+            "선택",
+            "사용승인일",
+            "사용검사일",
+            "준공인가일"
+          ]
+        },
+        {
+          "tag": "input",
+          "type": "text",
+          "placeholder": "예)20210720"
+        },
+        {
+          "tag": "button",
+          "type": "button",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "path": "root > trade_info",
+      "th": "거래 종류*",
+      "h1": "거래 종류*",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [
+        "매매",
+        "전세",
+        "월세"
+      ],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "radio"
+        },
+        {
+          "tag": "input",
+          "type": "radio"
+        },
+        {
+          "tag": "input",
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "path": "root > trade_info",
+      "th": "가격 정보*",
+      "h1": "가격 정보*",
+      "tdFollows": true,
+      "headers": [
+        "매매가",
+        "현 보증금",
+        "현 월세",
+        ""
+      ],
+      "labels": [
+        "세안고 매매"
+      ],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "text",
+          "name": "deposit"
+        },
+        {
+          "tag": "input",
+          "type": "text",
+          "name": "takeTenantDeposit",
+          "disabled": true
+        },
+        {
+          "tag": "input",
+          "type": "text",
+          "name": "takeTenantPrice",
+          "disabled": true
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        }
+      ]
+    },
+    {
+      "path": "root > trade_info",
+      "th": "융자금 여부",
+      "h1": "융자금 여부",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "select",
+          "type": "select-one",
+          "options": [
+            "선택",
+            "시세대비30% 이상",
+            "시세대비30% 미만",
+            "없음"
+          ]
+        },
+        {
+          "tag": "input",
+          "type": "text",
+          "placeholder": "융자금 입력",
+          "disabled": true
+        }
+      ]
+    },
+    {
+      "path": "root > trade_info",
+      "th": "관리비*",
+      "h1": "관리비*",
+      "tdFollows": true,
+      "headers": [
+        "관리비 여부"
+      ],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "select",
+          "type": "select-one",
+          "options": [
+            "선택",
+            "없음",
+            "있음"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "root > trade_info",
+      "th": "입주 가능 일자*",
+      "h1": "입주 가능 일자*",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [
+        "즉시 입주",
+        "일자 선택",
+        "협의 가능할 경우"
+      ],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "radio"
+        },
+        {
+          "tag": "input",
+          "type": "radio"
+        },
+        {
+          "tag": "input",
+          "type": "text",
+          "placeholder": "예)20210720",
+          "disabled": true
+        },
+        {
+          "tag": "button",
+          "type": "button",
+          "disabled": true,
+          "text": ""
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        }
+      ]
+    },
+    {
+      "path": "root > additional_info",
+      "th": "층 수*",
+      "h1": "층 수*",
+      "tdFollows": true,
+      "headers": [
+        "전체 층 수",
+        "해당 층 수",
+        "저/중/고",
+        ""
+      ],
+      "labels": [
+        "저/중/고 표기를 원할 경우 선택"
+      ],
+      "controls": [
+        {
+          "tag": "select",
+          "type": "select-one",
+          "options": [
+            "선택",
+            "1층",
+            "2층",
+            "3층",
+            "4층",
+            "5층",
+            "6층",
+            "7층",
+            "8층",
+            "9층",
+            "10층",
+            "11층",
+            "12층",
+            "13층",
+            "14층",
+            "15층",
+            "16층",
+            "17층",
+            "18층",
+            "19층",
+            "20층",
+            "21층",
+            "22층",
+            "23층",
+            "24층",
+            "25층",
+            "26층",
+            "27층",
+            "28층",
+            "29층",
+            "30층",
+            "31층",
+            "32층",
+            "33층",
+            "34층",
+            "35층",
+            "36층",
+            "37층",
+            "38층",
+            "39층",
+            "40층",
+            "41층",
+            "42층",
+            "43층",
+            "44층",
+            "45층",
+            "46층",
+            "47층",
+            "48층",
+            "49층",
+            "50층"
+          ]
+        },
+        {
+          "tag": "select",
+          "type": "select-one",
+          "disabled": true,
+          "options": [
+            "선택",
+            "반지층",
+            "옥탑"
+          ]
+        },
+        {
+          "tag": "select",
+          "type": "select-one",
+          "disabled": true,
+          "options": [
+            "선택",
+            "저",
+            "중",
+            "고"
+          ]
+        },
+        {
+          "tag": "input",
+          "type": "checkbox",
+          "disabled": true
+        }
+      ]
+    },
+    {
+      "path": "root > additional_info",
+      "th": "방향 기준/방향*",
+      "h1": "방향 기준/방향*",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "select",
+          "type": "select-one",
+          "options": [
+            "기준 선택",
+            "안방",
+            "거실"
+          ]
+        },
+        {
+          "tag": "select",
+          "type": "select-one",
+          "disabled": true,
+          "options": [
+            "방향 선택",
+            "동향",
+            "서향",
+            "남향",
+            "북향",
+            "북동향",
+            "북서향",
+            "남동향",
+            "남서향"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "root > additional_info",
+      "th": "욕실 수*",
+      "h1": "욕실 수*",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "path": "root > additional_info",
+      "th": "엘리베이터*",
+      "h1": "엘리베이터*",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [
+        "없음",
+        "있음"
+      ],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "radio"
+        },
+        {
+          "tag": "input",
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "path": "root > additional_info",
+      "th": "주차 가능 여부*",
+      "h1": "주차 가능 여부*",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "select",
+          "type": "select-one",
+          "options": [
+            "선택",
+            "불가능",
+            "가능"
+          ]
+        },
+        {
+          "tag": "input",
+          "type": "text",
+          "placeholder": "총 가능 주차수",
+          "disabled": true
+        }
+      ]
+    },
+    {
+      "path": "root > additional_info",
+      "th": "복층 여부*",
+      "h1": "복층 여부*",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [
+        "단층",
+        "복층"
+      ],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "radio"
+        },
+        {
+          "tag": "input",
+          "type": "radio"
+        }
+      ]
+    },
+    {
+      "path": "root > additional_info",
+      "th": "현관 유형",
+      "h1": "현관 유형",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "select",
+          "type": "select-one",
+          "options": [
+            "선택",
+            "복도식",
+            "계단식",
+            "복합식"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "root > additional_info",
+      "th": "세대(가구수)",
+      "h1": "세대(가구수)",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "path": "root > facility_info",
+      "th": "난방 시설",
+      "h1": "난방 시설",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [
+        "선택 안함",
+        "개별난방",
+        "중앙난방",
+        "지역난방"
+      ],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "radio",
+          "name": "heatingType"
+        },
+        {
+          "tag": "input",
+          "type": "radio",
+          "name": "heatingType"
+        },
+        {
+          "tag": "input",
+          "type": "radio",
+          "name": "heatingType"
+        },
+        {
+          "tag": "input",
+          "type": "radio",
+          "name": "heatingType"
+        }
+      ]
+    },
+    {
+      "path": "root > facility_info",
+      "th": "냉방 시설",
+      "h1": "냉방 시설",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [
+        "벽걸이형",
+        "스탠드형",
+        "천장형"
+      ],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        }
+      ]
+    },
+    {
+      "path": "root > facility_info",
+      "th": "생활 시설",
+      "h1": "생활 시설",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [
+        "전체 선택",
+        "침대",
+        "책상",
+        "옷장",
+        "식탁",
+        "쇼파",
+        "신발장",
+        "냉장고",
+        "세탁기",
+        "건조기",
+        "샤워부스",
+        "욕조",
+        "비데",
+        "싱크대",
+        "식기세척기",
+        "가스레인지",
+        "인덕션",
+        "전자레인지",
+        "가스오븐",
+        "TV",
+        "붙박이장"
+      ],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        }
+      ]
+    },
+    {
+      "path": "root > facility_info",
+      "th": "보안 시설",
+      "h1": "보안 시설",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [
+        "전체 선택",
+        "경비원",
+        "비디오폰",
+        "인터폰",
+        "카드키",
+        "CCTV",
+        "사설경비",
+        "현관보안",
+        "방범창"
+      ],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        }
+      ]
+    },
+    {
+      "path": "root > facility_info",
+      "th": "기타 시설",
+      "h1": "기타 시설",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [
+        "화재경보기",
+        "베란다",
+        "테라스",
+        "마당",
+        "무인택배함"
+      ],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        },
+        {
+          "tag": "input",
+          "type": "checkbox"
+        }
+      ]
+    },
+    {
+      "path": "root > visual_info",
+      "th": "일반 사진*",
+      "h1": "일반 사진*",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "button",
+          "type": "button",
+          "text": "사진 추가"
+        }
+      ]
+    },
+    {
+      "path": "root > detail_info",
+      "th": "제목*",
+      "h1": "제목*",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "input",
+          "type": "text",
+          "placeholder": "리스트에 노출되는 문구입니다. 40자 이내로 작성해 주세요."
+        }
+      ]
+    },
+    {
+      "path": "root > detail_info",
+      "th": "상세설명*(1000자 제한)",
+      "h1": "상세설명*",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "button",
+          "type": "submit",
+          "text": "AI 자동생성 (잔여 30회)"
+        },
+        {
+          "tag": "textarea",
+          "type": "textarea",
+          "placeholder": "매물 상세 페이지에 노출되는 문구입니다. 1000자 이내로 작성해 주세요. 건축물대장에 위반사항이 기재되어 있는 경우는 \"위반건축물\"이라고 반드시 표시해야 함 ※ 공인중개사법 표시·광고 명시사항 개정(24.12.11)"
+        }
+      ]
+    },
+    {
+      "path": "root > detail_info",
+      "th": "비공개 메모",
+      "h1": "비공개 메모",
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "textarea",
+          "type": "textarea",
+          "placeholder": "해당 내용은 외부에 공개되지 않으며, 등록자와 관리화면에만 표시됩니다."
+        }
+      ]
+    },
+    {
+      "path": "root > agent_contact_info",
+      "th": "연락처",
+      "h1": "연락처",
+      "personal": true,
+      "tdFollows": true,
+      "headers": [],
+      "labels": [],
+      "controls": [
+        {
+          "tag": "select",
+          "type": "select-one",
+          "options": [
+            "<가려짐 2자>",
+            "<가려짐 8자>"
+          ]
+        }
+      ]
+    }
+  ],
+  "looseControls": [
+    {
+      "tag": "input",
+      "type": "file",
+      "accept": "image/*",
+      "multiple": true,
+      "path": ""
+    },
+    {
+      "tag": "input",
+      "type": "file",
+      "accept": "image/jpg, image/jpeg, image/png",
+      "multiple": false,
+      "path": ""
+    }
+  ],
+  "sectionIds": [
+    "root",
+    "room_info",
+    "trade_info",
+    "additional_info",
+    "facility_info",
+    "visual_info",
+    "detail_info",
+    "agent_contact_info"
+  ]
+}

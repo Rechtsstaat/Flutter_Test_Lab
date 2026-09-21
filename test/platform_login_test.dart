@@ -7,41 +7,91 @@ import 'package:jibang_listing_test/fields.dart';
 import 'package:jibang_listing_test/mirror_session.dart';
 
 void main() {
-  group('로그인 화면으로 튕겼는지', () {
-    test('직방은 랜딩과 로그인 화면 둘 다 「로그인 안 됨」이다', () {
+  group('로그인 화면으로 튕겼는지 — 실물', () {
+    bool signedOut(ListingPlatform platform, String url) =>
+        platform.isSignedOut(Uri.parse(url));
+
+    test('직방은 랜딩(/intro)과 account.zigbang.com 로그인이 「로그인 안 됨」이다', () {
       const zigbang = ListingPlatform.zigbang;
-      expect(zigbang.isSignedOut(Uri.parse('https://m.test/zigbang/intro/')), isTrue);
+      expect(signedOut(zigbang, 'https://ceo.zigbang.com/intro'), isTrue);
       expect(
-        zigbang.isSignedOut(Uri.parse('https://m.test/zigbang/account/login/email/')),
+        signedOut(zigbang, 'https://ceo.zigbang.com/account/login/email'),
         isTrue,
       );
-      expect(zigbang.isSignedOut(Uri.parse('https://m.test/zigbang/')), isFalse);
+      // 로그인은 도메인을 건너간다 — OAuth 화면도 로그인 화면이다.
       expect(
-        zigbang.isSignedOut(Uri.parse('https://m.test/zigbang/form/oneroom/')),
+        signedOut(zigbang, 'https://account.zigbang.com/login/email'),
+        isTrue,
+      );
+      expect(signedOut(zigbang, 'https://ceo.zigbang.com/dashboard'), isFalse);
+      expect(
+        signedOut(zigbang, 'https://ceo.zigbang.com/ads/oneroom/ad-item/new'),
         isFalse,
       );
+    });
+
+    test('다방프로는 랜딩 `/` 과 /login 이 그 자리다', () {
+      const dabang = ListingPlatform.dabang;
+      // 로그인 안 된 /dashboard · /form/room 은 랜딩 `/` 으로 주소만 바뀐다 (실측).
+      expect(signedOut(dabang, 'https://pro.dabangapp.com/'), isTrue);
+      expect(signedOut(dabang, 'https://pro.dabangapp.com'), isTrue);
+      expect(signedOut(dabang, 'https://pro.dabangapp.com/login'), isTrue);
+      expect(signedOut(dabang, 'https://pro.dabangapp.com/dashboard'), isFalse);
+      expect(signedOut(dabang, 'https://pro.dabangapp.com/form/room'), isFalse);
+    });
+
+    test('다른 플랫폼·다른 호스트의 로그인 주소에는 반응하지 않는다', () {
+      const dabang = ListingPlatform.dabang;
+      expect(signedOut(dabang, 'https://ceo.zigbang.com/intro'), isFalse);
+      expect(signedOut(dabang, 'https://example.com/login'), isFalse);
+    });
+
+    test('당근은 로그인이 없다 (수집 없음)', () {
+      const daangn = ListingPlatform.daangn;
+      expect(daangn.hasLogin, isFalse);
+      expect(signedOut(daangn, daangn.dashboardUrl), isFalse);
+    });
+  });
+
+  group('랜딩과 로그인 화면을 가른다', () {
+    bool loginScreen(ListingPlatform platform, String url) =>
+        platform.urls.isLoginScreen(Uri.parse(url));
+
+    test('직방 랜딩은 로그인 화면이 아니고, account.zigbang.com 은 그렇다', () {
+      const zigbang = ListingPlatform.zigbang;
+      expect(loginScreen(zigbang, 'https://ceo.zigbang.com/intro'), isFalse);
+      expect(
+        loginScreen(zigbang, 'https://account.zigbang.com/login/email'),
+        isTrue,
+      );
+    });
+
+    test('다방프로 랜딩 `/` 은 로그인 화면이 아니고, /login 은 그렇다', () {
+      const dabang = ListingPlatform.dabang;
+      expect(loginScreen(dabang, 'https://pro.dabangapp.com/'), isFalse);
+      expect(loginScreen(dabang, 'https://pro.dabangapp.com/login'), isTrue);
+    });
+  });
+
+  group('로그인 화면으로 튕겼는지 — 미러', () {
+    bool signedOut(ListingPlatform platform, String path) => platform
+        .urlsOn(PlatformSite.mirror)
+        .isSignedOut(Uri.parse('https://$mirrorHost$path'));
+
+    test('직방은 랜딩과 로그인 화면 둘 다 「로그인 안 됨」이다', () {
+      const zigbang = ListingPlatform.zigbang;
+      expect(signedOut(zigbang, '/zigbang/intro/'), isTrue);
+      expect(signedOut(zigbang, '/zigbang/account/login/email/'), isTrue);
+      expect(signedOut(zigbang, '/zigbang/'), isFalse);
+      expect(signedOut(zigbang, '/zigbang/form/oneroom/'), isFalse);
     });
 
     test('다방은 로그인 화면이 그 자리다', () {
       const dabang = ListingPlatform.dabang;
-      expect(dabang.isSignedOut(Uri.parse('https://m.test/dabang/login/')), isTrue);
-      expect(dabang.isSignedOut(Uri.parse('https://m.test/dabang/')), isFalse);
-      expect(
-        dabang.isSignedOut(Uri.parse('https://m.test/dabang/form/room/')),
-        isFalse,
-      );
-    });
-
-    test('다른 플랫폼의 로그인 주소에는 반응하지 않는다', () {
-      expect(
-        ListingPlatform.dabang.isSignedOut(Uri.parse('https://m.test/zigbang/intro/')),
-        isFalse,
-      );
-    });
-
-    test('당근은 로그인이 없다 (수집 없음)', () {
-      expect(ListingPlatform.daangn.hasLogin, isFalse);
-      expect(ListingPlatform.daangn.isSignedOut(Uri.parse('https://m.test/daangn/')), isFalse);
+      expect(signedOut(dabang, '/dabang/login/'), isTrue);
+      expect(signedOut(dabang, '/dabang/'), isFalse);
+      expect(signedOut(dabang, '/dabang/form/room/'), isFalse);
+      expect(signedOut(dabang, '/zigbang/intro/'), isFalse);
     });
   });
 
@@ -57,8 +107,10 @@ void main() {
     test('다방은 플랫폼에 묻는다 — auth_key 가 HttpOnly 라 볼 수 없다', () {
       expect(ListingPlatform.dabang.sessionCheck, SessionCheck.platformAsks);
       final script = sessionProbeScript(ListingPlatform.dabang);
-      expect(script, contains('/dabang/api/v2/user/login/check'));
-      expect(script, contains('body.isLogin'), reason: '코드가 아니라 본문으로 가른다');
+      expect(script, contains('"/api/v2/user/login/check"'));
+      // 코드가 아니라 본문으로 가른다. 실물은 `result`, 미러는 `isLogin` 에 싣는다.
+      expect(script, contains('body.result === true'));
+      expect(script, contains('body.isLogin'));
       expect(script, isNot(contains('document.cookie')));
     });
 
@@ -69,7 +121,10 @@ void main() {
 
     test('모든 갈래가 SessionProbe 로 답한다', () {
       for (final platform in ListingPlatform.values) {
-        expect(sessionProbeScript(platform), contains('window.SessionProbe.postMessage'));
+        expect(
+          sessionProbeScript(platform),
+          contains('window.SessionProbe.postMessage'),
+        );
       }
     });
   });

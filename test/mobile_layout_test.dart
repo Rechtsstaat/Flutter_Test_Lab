@@ -13,51 +13,73 @@ import 'package:jibang_listing_test/mobile_layout.dart';
 /// to mirror_browser_test.dart, which asks a real browser.
 void main() {
   group('mirrorMobileLayoutScript', () {
-    test('covers this platform on the mirror, and nothing else', () {
-      for (final platform in ListingPlatform.values) {
-        final form = Uri.parse(platform.formUrl);
+    test('covers this platform on each site, and nothing else', () {
+      for (final site in PlatformSite.values) {
+        for (final platform in ListingPlatform.values) {
+          final urls = platform.urlsOn(site);
+          final form = Uri.parse(urls.form);
 
-        // Every page 0011 and the publish flow put in front of the agent.
-        for (final url in [
-          platform.formUrl,
-          platform.loginUrl,
-          platform.dashboardUrl,
-          platform.listingsUrl,
-        ]) {
+          // Every page 0011 and the publish flow put in front of the agent.
+          for (final url in [
+            urls.form,
+            urls.login,
+            urls.dashboard,
+            urls.listings,
+          ]) {
+            expect(
+              mirrorMobileLayoutScript(platform, Uri.parse(url)),
+              isNotNull,
+              reason: url,
+            );
+          }
+          // The mirror serves the form's index.html as a 308 to the directory.
           expect(
-            mirrorMobileLayoutScript(platform, Uri.parse(url)),
+            mirrorMobileLayoutScript(
+              platform,
+              form.replace(path: '${pageDirectory(form)}index.html'),
+            ),
             isNotNull,
-            reason: url,
           );
-        }
-        // The mirror serves the form's index.html as a 308 to the directory.
-        expect(
-          mirrorMobileLayoutScript(
-            platform,
-            form.replace(path: '${form.path}index.html'),
-          ),
-          isNotNull,
-        );
 
-        expect(
-          mirrorMobileLayoutScript(platform, form.replace(host: 'example.com')),
-          isNull,
-        );
-        expect(
-          mirrorMobileLayoutScript(platform, form.replace(path: '/dashboard/')),
-          isNull,
-        );
-        // One platform's profile must never dress another's page: the Kakao
-        // postcode frame and the other two mirrors are none of its business.
-        for (final other in ListingPlatform.values) {
-          if (other == platform) continue;
           expect(
-            mirrorMobileLayoutScript(platform, Uri.parse(other.formUrl)),
+            mirrorMobileLayoutScript(
+              platform,
+              form.replace(host: 'example.com'),
+            ),
             isNull,
-            reason: '${platform.label} styled ${other.label}',
           );
+          // One platform's profile must never dress another's page: the Kakao
+          // postcode frame and the other platforms are none of its business.
+          for (final other in ListingPlatform.values) {
+            if (other == platform) continue;
+            final theirs = Uri.parse(other.urlsOn(site).form);
+            expect(
+              mirrorMobileLayoutScript(platform, theirs),
+              isNull,
+              reason: '${platform.label} styled ${other.label} on $site',
+            );
+          }
         }
       }
+      // On the mirror the three platforms share one host, so the path decides.
+      final zigbangMirror = Uri.parse(
+        ListingPlatform.zigbang.urlsOn(PlatformSite.mirror).form,
+      );
+      expect(
+        mirrorMobileLayoutScript(
+          ListingPlatform.zigbang,
+          zigbangMirror.replace(path: '/dashboard/'),
+        ),
+        isNull,
+      );
+      // 직방's login lives on another domain; it is not ours to restyle.
+      expect(
+        mirrorMobileLayoutScript(
+          ListingPlatform.zigbang,
+          Uri.parse('https://account.zigbang.com/login/email'),
+        ),
+        isNull,
+      );
     });
 
     test('leaves the platform controls and their handlers alone', () {

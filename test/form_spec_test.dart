@@ -2,20 +2,30 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:jibang_listing_test/main.dart';
 import 'package:jibang_listing_test/photo_transfer.dart';
 
 void main() {
-  test('master form has all 50 fields and photos are optional', () {
+  /* 사진은 **필수 5~20장**이다.
+   *
+   * 직방이 그렇게 요구한다 — 「이미지 넣기」 창은 5장을 채우기 전에는 [확인] 을
+   * 열어 주지 않는다(2026-09-08 현장조사 §3-6). 통합 폼이 그보다 느슨하면 그 사진은
+   * 등록 흐름 한복판에서 조용히 떨어져 나간다. */
+  test('master form has all 50 fields and photos are required 5~20', () {
     final fields = groups.expand((group) => group.fields).toList();
 
     expect(groups, hasLength(5));
     expect(fields, hasLength(50));
-    expect(fields.where((field) => field.required), hasLength(28));
+    expect(fields.where((field) => field.required), hasLength(29));
     expect(
       fields.singleWhere((field) => field.key == 'photoCount').required,
-      isFalse,
+      isTrue,
     );
+    expect(minListingPhotos, 5);
+    expect(maxListingPhotos, 20);
+    // 숫자를 손으로 적지 않는다 — 플랫폼이 정한 것을 그대로 따라간다.
+    expect(minListingPhotos, PhotoTarget.zigbang.minimum);
   });
 
   test(
@@ -53,16 +63,25 @@ void main() {
       expect(ListingPlatform.zigbang.label, '직방');
       expect(ListingPlatform.dabang.label, '다방');
       expect(ListingPlatform.daangn.label, '당근');
-      expect(ListingPlatform.zigbang.formUrl, contains('/zigbang/form/'));
-      expect(ListingPlatform.dabang.formUrl, contains('/dabang/form/room/'));
+      expect(
+        ListingPlatform.zigbang.formUrl,
+        'https://ceo.zigbang.com/ads/oneroom/ad-item/new',
+      );
+      expect(
+        ListingPlatform.dabang.formUrl,
+        'https://pro.dabangapp.com/form/room',
+      );
       expect(ListingPlatform.daangn.formUrl, contains('/daangn/form/article/'));
-      // 당근은 자기 주소 검색을 쓰고, 사진은 다방·당근만 받는다.
+      // 당근은 자기 주소 검색을 쓰고, 사진은 셋 다 받는다.
       expect(ListingPlatform.daangn.usesKakaoPostcode, isFalse);
       expect(ListingPlatform.zigbang.usesKakaoPostcode, isTrue);
       expect(ListingPlatform.dabang.usesKakaoPostcode, isTrue);
-      expect(ListingPlatform.zigbang.photoTarget, isNull);
+      expect(ListingPlatform.zigbang.photoTarget, PhotoTarget.zigbang);
       expect(ListingPlatform.dabang.photoTarget, PhotoTarget.dabang);
       expect(ListingPlatform.daangn.photoTarget, PhotoTarget.daangn);
+      // 직방만 사진을 창 안에서 받는다.
+      expect(PhotoTarget.zigbang.modal, isTrue);
+      expect(PhotoTarget.dabang.modal, isFalse);
     },
   );
 
@@ -75,6 +94,10 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: ListingFormPage(
+            pickImages: () async => [
+              for (var i = 0; i < minListingPhotos; i++)
+                XFile('/tmp/room-$i.png'),
+            ],
             remotePageBuilder: (values, platform, photos) {
               receivedValues = values;
               receivedPlatform = platform;
@@ -109,9 +132,29 @@ void main() {
 
       await tester.tap(find.text('자동 채우기'));
       await tester.pump();
+      // 사진은 자동 채우기가 만들어 낼 수 없다 — 진짜 사진이라야 폼으로 들어간다.
+      expect(
+        cta().onPressed,
+        isNull,
+        reason: '사진 $minListingPhotos장을 채우기 전에는 등록 CTA 가 잠겨 있어야 합니다.',
+      );
+
+      await tester.scrollUntilVisible(
+        find.byTooltip('사진 추가'),
+        -400,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        await tester.tap(find.byTooltip('사진 추가'));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('$minListingPhotos/$maxListingPhotos'), findsOneWidget);
       expect(cta().onPressed, isNotNull);
       expect(find.textContaining('필수 항목'), findsNothing);
 
+      await tester.ensureVisible(find.text('광고 등록'));
       await tester.tap(find.text('광고 등록'));
       // The Process Hub animates for as long as a platform is being worked on,
       // so pump past the route change by hand.
@@ -124,8 +167,8 @@ void main() {
       // The platform page is mounted under the hub from the start.
       expect(find.text('전송 대상 폼'), findsOneWidget);
       expect(receivedPlatform, ListingPlatform.dabang);
-      expect(receivedPhotos, isEmpty);
-      expect(receivedValues, isNot(contains('photoCount')));
+      expect(receivedPhotos, hasLength(minListingPhotos));
+      expect(receivedValues, containsPair('photoCount', minListingPhotos));
       expect(receivedValues, containsPair('address', isNotEmpty));
       // The hi-fi's 구조 + 복층 여부 still reach the adapters as 방 구조.
       expect(receivedValues, containsPair('roomLayout', '오픈형 원룸'));
@@ -446,8 +489,135 @@ setTimeout(() => {
       expect(script, contains("ul[class*=SearchList] > li"));
       expect(script, contains('[class*=AddressList]'));
       expect(script, contains('data.buildingName'));
-      expect(script, contains('filled(data.address) && !complexProperty'));
+      // 단지를 직접 고르는 쪽은 카카오 화면을 띄우지 않는다 — 그 갈림이 살아 있는가.
+      expect(script, contains('if (complexProperty) {\n      await enterComplexAddress'));
+      expect(script, contains('} else if (filled(data.address)) {'));
+      expect(script, contains('await pickAddress();'));
     }
+  });
+
+  // 실물 실측(2026-09-20): 주소를 고르면 다방이 폼을 처음 상태로 되돌린다 — 주소와
+  // 섹션이 다른 「제목」에 손으로 친 글자까지 사라졌다. 그래서 주소는 맨 뒤가 아니라
+  // 값들보다 **먼저** 앉아야 하고, 그러고도 끝에서 한 번 더 대조해야 한다.
+  test('Dabang settles the address before the other fields and reconciles last', () {
+    final script = dabangInjectionScript(
+      '{"propertyType":"오픈형 원룸","address":"서울특별시 강남구 역삼동 1","title":"제목"}',
+    );
+    final address = script.indexOf('await pickAddress();');
+    final title = script.indexOf("fill('title'");
+    final reconcile = script.indexOf('await reconcile();');
+
+    expect(address, greaterThan(0), reason: '주소를 끝까지 받는 단계가 있어야 한다');
+    expect(title, greaterThan(address), reason: '주소가 값들보다 먼저 앉아야 한다');
+    expect(reconcile, greaterThan(title), reason: '대조는 모든 입력 뒤여야 한다');
+
+    // 되돌림을 되돌리는 그물: 넣은 것마다 「다시 재는 법·다시 넣는 법」을 적어 둔다.
+    expect(script, contains('const remember = (key, el, check, redo)'));
+    expect(script, contains('const reconcile = async ()'));
+    // 값을 받고 닫히는 창(월 관리비 상세입력) 안의 칸은 적어 두지 않는다 — 닫히면
+    // 사라지는 것이 정상이라, 적어 두면 「사라졌다」는 오탐이 된다.
+    expect(script, contains("el.closest('#modal-container')"));
+    // 본 차례가 끝난 뒤 늦게 도착하는 주소도 대조를 한 번 더 부른다.
+    expect(script, contains('if (settled && !replaying)'));
+  });
+
+  /* 사진은 폼이 다 채워진 **뒤에** 붙는다.
+   *
+   * [WebViewController.runJavaScript] 는 async 어댑터의 첫 await 에서 돌아오므로,
+   * 표식이 없으면 사진 첨부가 폼 입력과 나란히 돈다. 그리고 다방은 주소를 고르는 순간
+   * 폼을 처음 상태로 되돌려 방금 올라간 사진 카드까지 쓸어 간다 — 실기기에서 「카드가
+   * 한때 1장까지 보였다가 사라졌습니다」로 끝난 것이 이것이다(2026-09-20). */
+  test('어댑터 셋 다 사진을 붙여도 되는 때를 표식으로 알린다', () {
+    for (final script in [
+      zigbangInjectionScript('{}'),
+      dabangInjectionScript('{}'),
+      daangnInjectionScript('{}'),
+    ]) {
+      final down = script.indexOf('window.__flrFormDone = false;');
+      final up = script.lastIndexOf('window.__flrFormDone = true;');
+      expect(down, greaterThan(0), reason: '시작할 때 앞선 시도의 표식을 내려야 한다');
+      expect(up, greaterThan(down), reason: '끝난 뒤에 세워야 한다');
+      // 오류로 빠져나온 길에도 세운다 — 반쯤 채워진 폼이라도 사진은 붙는 편이 낫다.
+      expect(up, greaterThan(script.indexOf('} catch (error)')));
+    }
+  });
+
+  /* 직방은 **사진을 먼저** 붙이고 주소를 띄운다.
+   *
+   * 사진은 「이미지 넣기」 창 안에서 받는데, Radix 창이 열려 있는 동안은 body 의
+   * 포인터가 막힌다 — 그 위에 주소 검색 겹이 떠 있으면 사람이 주소를 고를 수 없다.
+   * 그래서 어댑터는 주소 직전에 표식을 세워 사진을 부르고, 사진이 끝났다는 말을 들은
+   * 뒤에 주소로 간다. */
+  test('직방 어댑터는 사진이 끝나기를 기다렸다가 주소 검색을 띄운다', () {
+    final script = zigbangInjectionScript('{}');
+    final handOff = script.indexOf('if (Number(data.photoCount) > 0) {');
+    final wait = script.indexOf('window.__flrPhotosDone !== true');
+    final address = script.indexOf("if (window.__flrPostcode) window.__flrPostcode.query");
+
+    expect(handOff, greaterThan(0), reason: '사진 차례를 내주는 자리가 있어야 한다');
+    expect(wait, greaterThan(handOff), reason: '내준 뒤에 기다려야 한다');
+    expect(address, greaterThan(wait), reason: '주소는 사진 뒤여야 한다');
+    // 사진이 없으면 기다리지 않고, 끝내 말이 없어도 주소로 넘어간다.
+    expect(script, contains('const until = Date.now() + 300000;'));
+    expect(script, contains('window.__flrPhotosDone = false;'));
+    // 직방도 이제 사진을 받는다 — 「미지원」 안내는 사라져야 한다.
+    expect(script, isNot(contains('사진 자동 첨부를 지원하지 않아')));
+  });
+
+  // [reconcile] 은 없어진 값을 다시 넣는데, 매물유형을 다시 누르면 7행이 통째로 다시
+  // 그려진다. 그 다시 그리기가 방금 올라간 사진 카드를 쓸어 간다. 사진 카드가 생기고
+  // 사라지는 것 자체도 body 의 변화라, 막지 않으면 사진이 제가 저를 지우게 된다.
+  test('사진을 붙이는 동안 다방 어댑터는 폼을 건드리지 않는다', () {
+    final script = dabangInjectionScript('{}');
+    expect(
+      script,
+      contains(
+        'const photoBusy = () => !!window.__flrPhotos && '
+        'Date.now() < (window.__flrPhotos.until || 0);',
+      ),
+    );
+    expect(script, contains('if (photoBusy()) return;'));
+    // 사진 자리 안에서만 일어난 변화는 폼의 되돌림이 아니다.
+    expect(
+      script,
+      contains('records.every(record => spot.contains(record.target))'),
+    );
+  });
+
+  // 되돌림 감시자가 [reconcile] 을 여러 번 부른다. 부를 때마다 같은 항목을 또 빼면
+  // 검증 숫자가 0까지 내려가고 「확인할 항목」에 같은 줄이 쌓인다.
+  test('여러 번 대조해도 검증 숫자와 확인할 항목이 부풀지 않는다', () {
+    final script = dabangInjectionScript('{}');
+    expect(
+      script,
+      contains(
+        'output.verified = Math.max(0, output.verified + deducted - stuck.length);',
+      ),
+    );
+    expect(script, contains('deducted = stuck.length;'));
+    expect(script, contains('/: 넣은 값이 폼에서 사라져/.test(output.missing[i])'));
+  });
+
+  // 실물 실측(2026-09-20): 사용승인일 칸은 넣은 `20250301` 을 제 형식으로 고쳐
+  // 되돌려 준다. 글자 그대로 견주면 넣고도 실패로 읽혔다.
+  test('Dabang compares the approval date by digits and says what it read', () {
+    final script = dabangInjectionScript(
+      '{"propertyType":"오픈형 원룸","approvalDate":"2025-03-01"}',
+    );
+    expect(script, contains('const sameDigits = (got, wanted)'));
+    expect(
+      script,
+      contains('const fill = (key, locate, value, transform = v => v, same = sameText)'),
+    );
+    // 느슨한 비교는 **그 칸에만** 준다. 전부에 주면 진짜 실패가 묻힌다.
+    expect(
+      script,
+      contains("data.approvalDate, v => String(v).replace(/-/g, ''), sameDigits)"),
+    );
+    // 정의 한 번, 쓰는 곳 한 번 — 그게 전부여야 한다.
+    expect('sameDigits'.allMatches(script).length, 2);
+    // 어긋났을 때 폼이 **무엇으로 읽었는지**를 적는다. 이것이 없어 한 번 더 재야 했다.
+    expect(script, contains('」인데 폼은 「'));
   });
 
   test(
@@ -582,6 +752,7 @@ setTimeout(() => {
       'bridge': postcodeBridgeScript('""'),
       'framePicker': addressPickerFrameScript('""'),
       'daangn': daangnInjectionScript('{}'),
+      'zigbangPhotoBridge': listingPhotoBridgeScript(PhotoTarget.zigbang),
       'dabangPhotoBridge': listingPhotoBridgeScript(PhotoTarget.dabang),
       'daangnPhotoBridge': listingPhotoBridgeScript(PhotoTarget.daangn),
       'photoCommand': listingPhotoCommand('append', ['aGVsbG8=']),

@@ -21,6 +21,10 @@ import 'package:jibang_listing_test/mobile_layout.dart';
 ///
 /// Needs Chrome and the mirror. Without either the probe says so and these
 /// skip, so an offline machine is not a failing one.
+/// This harness measures the mirror: the live sites need an account.
+PlatformUrls mirrorOf(ListingPlatform platform) =>
+    platform.urlsOn(PlatformSite.mirror);
+
 void main() {
   const viewport = 390;
   final probe = File('test/tools/mirror_layout_probe.mjs');
@@ -49,10 +53,10 @@ void main() {
   }
 
   List<String> urlsOf(ListingPlatform platform) => [
-    '--login=${platform.loginUrl}',
-    '--dashboard=${platform.dashboardUrl}',
-    '--form=${platform.formUrl}',
-    '--listings=${platform.listingsUrl}',
+    '--login=${mirrorOf(platform).login}',
+    '--dashboard=${mirrorOf(platform).dashboard}',
+    '--form=${mirrorOf(platform).form}',
+    '--listings=${mirrorOf(platform).listings}',
   ];
 
   group('the mirror serves what the app asks for', () {
@@ -139,7 +143,10 @@ void main() {
         Map<String, dynamic>? report;
         try {
           script.writeAsStringSync(
-            mirrorMobileLayoutScript(platform, Uri.parse(platform.loginUrl))!,
+            mirrorMobileLayoutScript(
+              platform,
+              Uri.parse(mirrorOf(platform).login),
+            )!,
           );
           report = await run([
             '--job=signin',
@@ -174,7 +181,7 @@ void main() {
         }
         // A gated platform has to actually show its form here; 당근 has none,
         // and whatever its dashboard does show just has to be reachable.
-        if (platform.loginUrl != platform.dashboardUrl) {
+        if (mirrorOf(platform).login != mirrorOf(platform).dashboard) {
           expect(
             controls,
             hasLength(3),
@@ -197,7 +204,10 @@ void main() {
         Map<String, dynamic>? report;
         try {
           script.writeAsStringSync(
-            mirrorMobileLayoutScript(platform, Uri.parse(platform.formUrl))!,
+            mirrorMobileLayoutScript(
+              platform,
+              Uri.parse(mirrorOf(platform).form),
+            )!,
           );
           report = await run([
             '--job=layout',
